@@ -1,0 +1,236 @@
+# Laboratório Zabbix 8.0 + OpenTelemetry
+#
+#   aplicação instrumentada --OTLP/gRPC:4317--> zabbix-proxy (coletor APM)
+#                                                   |
+#                                                   v
+#   zabbix-web (APM > Traces/Metrics/Logs) <--- ClickHouse (tabelas otel_*)
+#   zabbix-server (itens "Telemetry query") <------'
+#
+# Uso: veja o README.md. Resumo: make env && make up && make bootstrap && make verificar
+
+name: zbx8lab
+
+# Imagens fixadas por digest (o "tag@digest" mantém a tag só para leitura; o
+# Docker usa o digest). São as da primeira subida que funcionou, em 08/10/2026
+# (frontend 8.0.0rc2). Para trocar, defina a variável *_IMAGE no .env;
+# "make vm-digests" mostra os digests em uso na VM.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Mesma fonte de telemetria para server, proxy e frontend.
+x-telemetria: &telemetria
+  ZBX_TELEMETRYPROVIDER_0: '{"provider":"clickhouse","url":"http://clickhouse:8123","db":"zabbix"}'
+  ZBX_TELEMETRYPROVIDER_0_USERNAME: zabbix
+  ZBX_TELEMETRYPROVIDER_0_PASSWORD: ${CLICKHOUSE_PASSWORD:?rode "make env" para gerar o arquivo .env}
+
+x-banco: &banco
+  DB_SERVER_HOST: postgres
+  POSTGRES_USER: zabbix
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?rode "make env" para gerar o arquivo .env}
+  POSTGRES_DB: zabbix
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?rode "make env" para gerar o arquivo .env}
+      POSTGRES_DB: zabbix
+    volumes:
+      # A imagem do PostgreSQL 18 guarda os dados em /var/lib/postgresql/18/...
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zabbix -d zabbix"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    # Na primeira subida o entrypoint (em Go) do zabbix-server manda o
+    # create.sql.gz inteiro numa única query. Com 512m o PostgreSQL morre por
+    # OOM no meio dela ("execute SQL script ...: conn closed").
+    mem_limit: ${POSTGRES_MEM:-1536m}
+    stop_grace_period: 1m
+    logging: *logging
+
+  clickhouse:
+    # IMPORTANTE: precisa ser 26.8 ou mais novo. O proxy do Zabbix grava as datas
+    # como número decimal (segundos.nanos) e versões anteriores do ClickHouse
+    # rejeitam esse formato em colunas DateTime64 (testado: 26.4 falha, 26.8 grava).
+    image: ${CLICKHOUSE_IMAGE:-clickhouse/clickhouse-server:26.8-alpine@sha256:58f554637bfe3b77e0335b4ff90611279dbdf8d262dc15225ee93901853dfa13}
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: zabbix
+      CLICKHOUSE_USER: zabbix
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?rode "make env" para gerar o arquivo .env}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - chdata:/var/lib/clickhouse
+      - ./config/clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - ./config/clickhouse/config.d/baixo-consumo.xml:/etc/clickhouse-server/config.d/baixo-consumo.xml:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user zabbix --password \"$${CLICKHOUSE_PASSWORD}\" --query 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+    mem_limit: ${CLICKHOUSE_MEM:-1280m}
+    stop_grace_period: 2m
+    logging: *logging
+
+  zabbix-server:
+    image: ${ZBX_SERVER_IMAGE:-zabbix/zabbix-server-pgsql:alpine-trunk@sha256:22c4ee4a5448b714d54f184dac6e2e1d6a2c5b5a2beb47cb9f89de5179761cc9}
+    restart: unless-stopped
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      <<: [*banco, *telemetria]
+      # Laboratório pequeno: menos processos do que o padrão
+      ZBX_STARTPOLLERS: "2"
+      ZBX_STARTPOLLERSUNREACHABLE: "1"
+      ZBX_STARTTRAPPERS: "2"
+      ZBX_STARTPINGERS: "1"
+      ZBX_STARTDISCOVERERS: "1"
+      ZBX_STARTHTTPPOLLERS: "1"
+      ZBX_STARTPREPROCESSORS: "2"
+      ZBX_STARTDBSYNCERS: "2"
+      ZBX_STARTLLDPROCESSORS: "1"
+      ZBX_STARTTELEMETRYQUERYPOLLERS: "1"
+    mem_limit: 768m
+    stop_grace_period: 30s
+    logging: *logging
+
+  zabbix-web:
+    image: ${ZBX_WEB_IMAGE:-zabbix/zabbix-web-nginx-pgsql:alpine-trunk@sha256:5bc8fd14727cd1ec5cce6682a4956b31211c2e452f71af2832775e58d4aa7e80}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      zabbix-server:
+        condition: service_started
+    environment:
+      <<: [*banco, *telemetria]
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_SERVER_NAME: ${ZBX_SERVER_NAME:-Lab Zabbix 8 + OpenTelemetry}
+      PHP_TZ: ${TZ_LAB:-America/Sao_Paulo}
+    ports:
+      # Por padrão só em 127.0.0.1: acesse por túnel SSH (veja o README).
+      - "${BIND_ADDR:-127.0.0.1}:${ZBX_WEB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/ping"]
+      interval: 30s
+      timeout: 3s
+      retries: 5
+      start_period: 60s
+    mem_limit: 384m
+    logging: *logging
+
+  zabbix-proxy:
+    image: ${ZBX_PROXY_IMAGE:-zabbix/zabbix-proxy-sqlite3:alpine-trunk@sha256:c9ce82c24db5e679e1f5023ccc80ca0fd86e4d9dd85f5dca86df4bf50983317c}
+    restart: unless-stopped
+    init: true
+    depends_on:
+      zabbix-server:
+        condition: service_started
+      clickhouse:
+        condition: service_healthy
+    # A imagem ainda não tem variável de ambiente para ligar o coletor
+    # OpenTelemetry (StartAPMCollectors). Por isso o proxy sobe com um arquivo
+    # que inclui a configuração padrão da imagem e acrescenta esses parâmetros.
+    command: ["/usr/sbin/zabbix_proxy", "--foreground", "-c", "/etc/zabbix/lab/zabbix_proxy_lab.conf"]
+    environment:
+      <<: *telemetria
+      ZBX_HOSTNAME: ${ZBX_PROXY_NAME:-zabbix-proxy-otel}
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_STARTPOLLERS: "1"
+      ZBX_STARTPOLLERSUNREACHABLE: "1"
+      ZBX_STARTTRAPPERS: "1"
+      ZBX_STARTPINGERS: "1"
+      ZBX_STARTDISCOVERERS: "1"
+      ZBX_STARTHTTPPOLLERS: "1"
+      ZBX_STARTPREPROCESSORS: "1"
+      ZBX_STARTDBSYNCERS: "1"
+      ZBX_STARTTELEMETRYQUERYPOLLERS: "1"
+    volumes:
+      - ./config/proxy/zabbix_proxy_lab.conf:/etc/zabbix/lab/zabbix_proxy_lab.conf:ro
+      - proxydb:/var/lib/zabbix/db_data
+    ports:
+      # OTLP/gRPC para aplicações fora do Compose (o gerador usa a rede interna).
+      - "${BIND_ADDR:-127.0.0.1}:${OTLP_PORT:-4317}:4317"
+    mem_limit: 384m
+    stop_grace_period: 30s
+    logging: *logging
+
+  # Gerador de telemetria de teste (traces, métricas e logs). Será trocado pelo
+  # coletor da apuração do TSE na próxima etapa.
+  gerador:
+    build: ./ferramentas
+    image: zbx8lab-ferramentas:local
+    restart: unless-stopped
+    depends_on:
+      zabbix-proxy:
+        condition: service_started
+    command: ["python", "gerador.py"]
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://zabbix-proxy:4317
+      OTEL_SERVICE_NAME: gerador-demo
+      GERADOR_INTERVALO_S: ${GERADOR_INTERVALO_S:-5}
+    mem_limit: 160m
+    logging: *logging
+
+  # Tarefa pontual: troca a senha do Admin e cadastra o proxy com a coleta
+  # OpenTelemetry habilitada. Rode com: make bootstrap
+  bootstrap:
+    build: ./ferramentas
+    image: zbx8lab-ferramentas:local
+    profiles: ["tools"]
+    restart: "no"
+    depends_on:
+      zabbix-web:
+        condition: service_healthy
+    command: ["python", "bootstrap.py"]
+    environment:
+      ZBX_API_URL: http://zabbix-web:8080/api_jsonrpc.php
+      ZBX_ADMIN_PASSWORD: ${ZBX_ADMIN_PASSWORD:?rode "make env" para gerar o arquivo .env}
+      ZBX_PROXY_NAME: ${ZBX_PROXY_NAME:-zabbix-proxy-otel}
+    logging: *logging
+
+  # Opcional: servidor MCP do Zabbix (IA consultando o Zabbix). Desligado por
+  # padrão. Suba com: make mcp-up
+  zabbix-mcp-server:
+    image: zabbix/zabbix-mcp-server:${ZBX_TAG:-alpine-trunk}
+    profiles: ["mcp"]
+    restart: unless-stopped
+    read_only: true
+    depends_on:
+      zabbix-web:
+        condition: service_healthy
+    environment:
+      ZBX_FRONTEND_URL: http://zabbix-web:8080/api_jsonrpc.php
+      # O filtro de origem fica na publicação da porta (só 127.0.0.1 da VM).
+      ZBX_ALLOWEDIP: 0.0.0.0/0
+    tmpfs:
+      - /tmp
+      - /var/lib/zabbix/enc_internal:mode=0700,uid=1997,gid=0
+    ports:
+      # NUNCA publique esta porta na internet: o token da API passa por ela.
+      - "127.0.0.1:${MCP_PORT:-8443}:8443"
+    mem_limit: 256m
+    logging: *logging
+
+volumes:
+  pgdata: {}
+  chdata: {}
+  proxydb: {}

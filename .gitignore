@@ -1,0 +1,17 @@
+# Segredos e dados locais: nunca vão para o repositório
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Ajustes locais do deploy (IP, caminho de chave)
+deploy.conf
+
+# Saídas de diagnóstico
+*.log
+diagnostico-*.txt
+
+# Python
+__pycache__/
+*.pyc
