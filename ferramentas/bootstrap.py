@@ -4,10 +4,13 @@
 2. Troca a senha padrão do Admin (zabbix) pela senha do arquivo .env.
 3. Cadastra o proxy ativo e habilita nele a coleta OpenTelemetry, ou atualiza
    o cadastro se o proxy já existir.
+4. Habilita o módulo do widget "Insights" (IA) e importa os templates de
+   config/zabbix-templates/ (idempotente: pode rodar várias vezes).
 
 Usa só a biblioteca padrão do Python.
 """
 
+import glob
 import json
 import os
 import sys
@@ -22,6 +25,7 @@ USUARIO = "Admin"
 PROXY = os.environ.get("ZBX_PROXY_NAME", "zabbix-proxy-otel")
 ESPERA_MAX_S = int(os.environ.get("BOOTSTRAP_ESPERA_S", "600"))
 TENTATIVAS_LOGIN = int(os.environ.get("BOOTSTRAP_TENTATIVAS_LOGIN", "4"))
+PASTA_TEMPLATES = os.environ.get("ZBX_TEMPLATES_DIR", "/app/zabbix-templates")
 
 
 class ErroApi(Exception):
@@ -132,6 +136,55 @@ def configurar_proxy(token):
     print(f"[info] cadastro atual: {json.dumps(conferido[0], ensure_ascii=False)}")
 
 
+def configurar_widget_insights(token):
+    # 1 = MODULE_STATUS_ENABLED (include/defines.inc.php). O módulo mora em
+    # config/zabbix-widgets/insights, montado em /usr/share/zabbix/modules/
+    # insights no zabbix-web (compose.yaml).
+    modulo_id = "insights"
+    caminho_relativo = "modules/insights"
+
+    existentes = chamar("module.get", {"output": ["moduleid", "relative_path", "status"]}, token)
+    existente = next((m for m in existentes if m.get("relative_path") == caminho_relativo), None)
+
+    if existente:
+        chamar("module.update", {"moduleid": existente["moduleid"], "status": 1}, token)
+        print(f"[ok] módulo do widget Insights já existia (id {existente['moduleid']}); habilitado")
+    else:
+        resultado = chamar(
+            "module.create",
+            {"id": modulo_id, "relative_path": caminho_relativo, "status": 1},
+            token,
+        )
+        print(f"[ok] módulo do widget Insights cadastrado (id {resultado['moduleids'][0]}) e habilitado")
+
+
+def configurar_templates(token):
+    arquivos = sorted(glob.glob(os.path.join(PASTA_TEMPLATES, "*.yaml")))
+    if not arquivos:
+        print(f"[aviso] nenhum template em {PASTA_TEMPLATES}")
+        return
+
+    for caminho in arquivos:
+        with open(caminho, encoding="utf-8") as f:
+            fonte = f.read()
+
+        chamar(
+            "configuration.import",
+            {
+                "format": "yaml",
+                "source": fonte,
+                "rules": {
+                    "template_groups": {"createMissing": True},
+                    "templates": {"createMissing": True, "updateExisting": True},
+                    "items": {"createMissing": True, "updateExisting": True},
+                    "triggers": {"createMissing": True, "updateExisting": True},
+                },
+            },
+            token,
+        )
+        print(f"[ok] template importado: {os.path.basename(caminho)}")
+
+
 def main():
     if len(SENHA_NOVA) < 12:
         sys.exit("[erro] ZBX_ADMIN_PASSWORD vazia ou curta demais. Rode 'make env' para gerar o .env.")
@@ -141,6 +194,17 @@ def main():
 
     try:
         configurar_proxy(token)
+        try:
+            configurar_widget_insights(token)
+        except ErroApi as erro:
+            # Não trava o bootstrap: dá pra habilitar à mão depois em
+            # Administration > General > Modules > Scan directory.
+            print(f"[aviso] não consegui habilitar o widget Insights pela API: {erro}")
+        try:
+            configurar_templates(token)
+        except ErroApi as erro:
+            # Idem: dá pra importar à mão depois em Data collection > Templates > Import.
+            print(f"[aviso] não consegui importar os templates pela API: {erro}")
     finally:
         try:
             chamar("user.logout", [], token)

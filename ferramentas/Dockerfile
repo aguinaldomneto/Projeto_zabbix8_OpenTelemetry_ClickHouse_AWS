@@ -9,7 +9,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY gerador.py bootstrap.py ./
+COPY gerador.py bootstrap.py api_ficticia.py trafego.py ia_assistente.py ./
 
 # Não precisa de root para nada
 RUN useradd --system --uid 10001 --no-create-home lab
