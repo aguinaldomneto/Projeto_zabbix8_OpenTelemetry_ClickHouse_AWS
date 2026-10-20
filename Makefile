@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := ajuda
 COMPOSE := docker compose
 
-.PHONY: ajuda env preflight up bootstrap verificar diagnostico ps logs down limpar digests mcp-up mcp-down tudo deploy vm-status vm-tunel vm-senha vm-parar vm-ligar vm-digests vm-liberar-ip hosts-up hosts-down ia-up ia-down local-up local-down gera-carga-de-estresse templates templates-status
+.PHONY: ajuda env preflight up bootstrap verificar diagnostico ps logs down limpar digests mcp-up mcp-down tudo deploy vm-status vm-tunel vm-senha vm-parar vm-ligar vm-digests vm-liberar-ip hosts-up hosts-down ia-up ia-down investigador-up investigador-down investigador-config investigador-desligar investigador-remover investigador-teste investigador-teste-rapido ia-legado-up ia-legado-down local-up local-down gera-carga-de-estresse templates templates-status
 
 ajuda: ## Mostra os comandos disponíveis
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  make %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -40,12 +40,12 @@ logs: ## Acompanha os logs (Ctrl+C sai). Ex.: make logs S=zabbix-proxy
 	$(COMPOSE) logs -f --tail 100 $(S)
 
 down: ## Para e remove os containers (os dados ficam nos volumes)
-	$(COMPOSE) --profile mcp --profile tools --profile hosts --profile ia down
+	$(COMPOSE) --profile mcp --profile tools --profile hosts --profile ia --profile ia-legado --profile investigador-teste down
 
 limpar: ## APAGA os containers E os dados (pede confirmação)
 	@printf 'Isso apaga o banco do Zabbix e toda a telemetria. Digite "apagar" para confirmar: '; \
 	read resposta; [ "$$resposta" = "apagar" ] || { echo "Cancelado."; exit 1; }
-	$(COMPOSE) --profile mcp --profile tools --profile hosts --profile ia down -v
+	$(COMPOSE) --profile mcp --profile tools --profile hosts --profile ia --profile ia-legado --profile investigador-teste down -v
 
 digests: ## Mostra o digest de cada imagem em uso (para fixar a versão)
 	@docker image inspect --format '  {{index .RepoDigests 0}}' $$($(COMPOSE) config --images | grep -v ':local$$') 2>/dev/null \
@@ -69,11 +69,38 @@ hosts-up: ## Sobe os 5 hosts simulados nesta VM (os outros 10 ficam no WSL local
 hosts-down: ## Para os 5 hosts simulados desta VM
 	$(COMPOSE) --profile hosts rm -sf
 
-ia-up: ## Sobe a ponte Zabbix -> Gemini (ia-assistente)
-	$(COMPOSE) --profile ia up -d ia-assistente
+ia-up: investigador-up ## (alias) Sobe o investigador de causa raiz
 
-ia-down: ## Para a ponte Zabbix -> Gemini
-	$(COMPOSE) --profile ia rm -sf ia-assistente
+ia-down: investigador-down ## (alias) Para o investigador
+
+investigador-up: ## Sobe o investigador (sem GEMINI_API_KEY = modo somente evidências)
+	@./scripts/gerar-env.sh
+	$(COMPOSE) build investigador
+	$(COMPOSE) --profile ia up -d --no-deps investigador
+
+investigador-down: ## Para o investigador (o cache/auditoria ficam no volume)
+	$(COMPOSE) --profile ia rm -sf investigador
+
+investigador-config: ## Cria/atualiza no Zabbix: usuário/papel/token, media type, action, módulo e dashboard (idempotente)
+	@./scripts/configurar-investigador.sh
+
+investigador-desligar: ## Desliga a action e o media type do investigador no Zabbix (não apaga nada)
+	@./scripts/configurar-investigador.sh --desligar
+
+investigador-remover: ## REMOVE do Zabbix tudo que o investigador-config criou
+	@./scripts/configurar-investigador.sh --remover
+
+investigador-teste: ## Testes do investigador com mock do Gemini (unitários + fluxo real com incidente simulado)
+	@./scripts/investigador-teste.sh
+
+investigador-teste-rapido: ## Só testes unitários e de integração sem disparar incidente
+	@./scripts/investigador-teste.sh --rapido
+
+ia-legado-up: ## Sobe o ia-assistente legado (rollback)
+	$(COMPOSE) --profile ia-legado up -d --no-deps ia-assistente
+
+ia-legado-down: ## Para o ia-assistente legado
+	$(COMPOSE) --profile ia-legado rm -sf ia-assistente
 
 # --- A partir do seu computador, para a VM da AWS ---------------------------
 deploy: ## Acha a VM na AWS, copia esta pasta e sobe tudo nela

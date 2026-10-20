@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<!--
+  Usuário SOMENTE LEITURA do serviço "investigador" (causa raiz com IA).
+  - senha vem da variável CLICKHOUSE_RO_PASSWORD do container (gerada no .env
+    pelo "make env"); nunca fica neste arquivo;
+  - profile readonly=1 (nega INSERT/ALTER/DDL e mudança de settings), tempo e
+    linhas limitados; quota por hora;
+  - SELECT apenas nas tabelas otel_* do banco zabbix;
+  - só aceita conexões das redes privadas (rede do Docker).
+  Para desligar: remova o volume deste arquivo no compose.yaml e recrie o
+  container do ClickHouse (os dados ficam no volume chdata).
+-->
+<clickhouse>
+    <profiles>
+        <investigador_ro>
+            <readonly>1</readonly>
+            <max_execution_time>10</max_execution_time>
+            <max_result_rows>1000</max_result_rows>
+            <result_overflow_mode>break</result_overflow_mode>
+            <max_rows_to_read>50000000</max_rows_to_read>
+            <max_memory_usage>268435456</max_memory_usage>
+        </investigador_ro>
+    </profiles>
+
+    <quotas>
+        <investigador_ro>
+            <interval>
+                <duration>3600</duration>
+                <queries>3000</queries>
+                <errors>500</errors>
+                <result_rows>500000</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>1800</execution_time>
+            </interval>
+        </investigador_ro>
+    </quotas>
+
+    <users>
+        <investigador_ro>
+            <password from_env="CLICKHOUSE_RO_PASSWORD"/>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>10.0.0.0/8</ip>
+                <ip>172.16.0.0/12</ip>
+                <ip>192.168.0.0/16</ip>
+            </networks>
+            <profile>investigador_ro</profile>
+            <quota>investigador_ro</quota>
+            <grants>
+                <query>GRANT SELECT ON zabbix.otel_traces</query>
+                <query>GRANT SELECT ON zabbix.otel_logs</query>
+                <query>GRANT SELECT ON zabbix.otel_metrics_gauge</query>
+                <query>GRANT SELECT ON zabbix.otel_metrics_sum</query>
+                <query>GRANT SELECT ON zabbix.otel_metrics_histogram</query>
+            </grants>
+        </investigador_ro>
+    </users>
+</clickhouse>

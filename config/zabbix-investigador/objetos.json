@@ -1,0 +1,76 @@
+{
+  "_comentario": "Objetos do Zabbix criados/atualizados (idempotente, por nome) por ferramentas/configurar_investigador.py. Valores @... são resolvidos pelo script. Nada aqui é segredo: o token do investigador vai numa macro global SECRETA, preenchida a partir do .env.",
+  "macros_globais": [
+    {"macro": "{$INVESTIGADOR.URL}", "value": "http://investigador:8091", "type": 0,
+     "description": "URL interna do serviço investigador (rede do Compose)."},
+    {"macro": "{$INVESTIGADOR.TOKEN}", "value": "@env:INVESTIGADOR_TOKEN", "type": 1,
+     "description": "Token compartilhado webhook -> investigador (secreto)."}
+  ],
+  "mediatype": {
+    "name": "Investigador IA (RCA)",
+    "type": 4,
+    "timeout": "10s",
+    "process_tags": 1,
+    "show_event_menu": 1,
+    "event_menu_name": "Relatório RCA (investigador)",
+    "event_menu_url": "@frontend/zabbix.php?action=investigador.relatorio&eventid={EVENT.TAGS.\"rca.id\"}",
+    "description": "Envia problemas ao serviço investigador (pré-análise automática). Desligue com: make investigador-desligar",
+    "parameters": [
+      {"name": "url", "value": "{$INVESTIGADOR.URL}"},
+      {"name": "token", "value": "{$INVESTIGADOR.TOKEN}"},
+      {"name": "eventid", "value": "{EVENT.ID}"},
+      {"name": "valor", "value": "{EVENT.VALUE}"},
+      {"name": "servico", "value": "{$API_SERVICE}"},
+      {"name": "host", "value": "{HOST.HOST}"},
+      {"name": "severidade", "value": "{EVENT.NSEVERITY}"}
+    ],
+    "message_templates": [
+      {"eventsource": 0, "recovery": 0, "subject": "{EVENT.NAME}", "message": "Evento {EVENT.ID} em {HOST.HOST}"}
+    ]
+  },
+  "role": {
+    "name": "Investigador IA (svc, mínimo)",
+    "type": 1,
+    "rules": {
+      "ui.default_access": 0,
+      "ui": [{"name": "monitoring.problems", "status": 1}],
+      "modules.default_access": 0,
+      "api.access": 1,
+      "api.mode": 1,
+      "api": ["event.get", "problem.get", "trigger.get", "host.get", "item.get",
+              "usermacro.get", "event.acknowledge"],
+      "actions.default_access": 0,
+      "actions": [{"name": "add_problem_comments", "status": 1}]
+    }
+  },
+  "usergroup": {
+    "name": "Investigador IA (svc)",
+    "gui_access": 3,
+    "grupos_leitura": ["Lab/APIs fictícias", "Lab/OTel APM"],
+    "_templates_comentario": "Também recebe leitura nos grupos de todos os hosts que usam estes templates (a action só notifica usuários com leitura no host).",
+    "templates_alvo": ["APM API ficticia", "OTel ClickHouse APM"]
+  },
+  "user": {
+    "username": "svc-investigador",
+    "name": "Serviço investigador (RCA)",
+    "sendto": "investigador",
+    "token_nome": "investigador"
+  },
+  "action": {
+    "name": "Investigador IA - pré-análise (severidade >= Média, APM)",
+    "eventsource": 0,
+    "esc_period": "1h",
+    "filter": {
+      "evaltype": 3,
+      "formula": "A and D and (B or C)",
+      "conditions": [
+        {"conditiontype": 4, "operator": 5, "value": "3", "formulaid": "A"},
+        {"conditiontype": 26, "operator": 0, "value2": "layer", "value": "apm", "formulaid": "B"},
+        {"conditiontype": 26, "operator": 0, "value2": "target", "value": "opentelemetry", "formulaid": "C"},
+        {"conditiontype": 16, "operator": 11, "formulaid": "D"}
+      ]
+    }
+  },
+  "modulo": {"relative_path": "modules/investigador"},
+  "dashboard": {"name": "Investigador IA (RCA)"}
+}

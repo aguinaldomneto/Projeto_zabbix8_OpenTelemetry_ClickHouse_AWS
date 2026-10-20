@@ -1,0 +1,39 @@
+{
+	"manifest_version": 2.0,
+	"id": "investigador",
+	"type": "widget",
+	"name": "Investigador (RCA)",
+	"namespace": "Investigador",
+	"version": "1.0",
+	"author": "Laboratório Zabbix 8 + OpenTelemetry",
+	"description": "Problemas recentes com pré-análise automática de causa raiz, botão Aprofundar e cópia do resumo mascarado para o Gemini. Fala com o serviço investigador pelo servidor (token nunca chega ao navegador); CSRF ativo.",
+	"widget": {
+		"js_class": "CWidgetInvestigador",
+		"size": {
+			"width": 72,
+			"height": 10
+		},
+		"refresh_rate": 60
+	},
+	"actions": {
+		"widget.investigador.view": {
+			"class": "WidgetView"
+		},
+		"widget.investigador.relatorio": {
+			"class": "WidgetRelatorio",
+			"layout": "layout.json"
+		},
+		"widget.investigador.aprofundar": {
+			"class": "WidgetAprofundar",
+			"layout": "layout.json"
+		},
+		"investigador.relatorio": {
+			"class": "RelatorioPagina",
+			"view": "investigador.relatorio",
+			"layout": "layout.htmlpage"
+		}
+	},
+	"assets": {
+		"js": ["class.widget.js"]
+	}
+}

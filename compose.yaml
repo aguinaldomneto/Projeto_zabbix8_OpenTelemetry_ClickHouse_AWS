@@ -81,8 +81,11 @@ services:
       CLICKHOUSE_USER: zabbix
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?rode "make env" para gerar o arquivo .env}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      # Senha do usuário readonly "investigador_ro" (config/clickhouse/users.d).
+      CLICKHOUSE_RO_PASSWORD: ${CLICKHOUSE_RO_PASSWORD:?rode "make env" para acrescentar CLICKHOUSE_RO_PASSWORD ao .env}
     volumes:
       - chdata:/var/lib/clickhouse
+      - ./config/clickhouse/users.d/investigador-ro.xml:/etc/clickhouse-server/users.d/investigador-ro.xml:ro
       - ./config/clickhouse/init:/docker-entrypoint-initdb.d:ro
       - ./config/clickhouse/config.d/baixo-consumo.xml:/etc/clickhouse-server/config.d/baixo-consumo.xml:ro
       - ./config/clickhouse/config.d/listen-ipv4.xml:/etc/clickhouse-server/config.d/listen-ipv4.xml:ro
@@ -145,14 +148,20 @@ services:
       ZBX_SERVER_HOST: zabbix-server
       ZBX_SERVER_NAME: ${ZBX_SERVER_NAME:-Lab Zabbix 8 + OpenTelemetry}
       PHP_TZ: ${TZ_LAB:-America/Sao_Paulo}
-      # Lido pelo módulo do widget "Insights" (Actions/WidgetAnalyze.php).
-      IA_ASSISTENTE_URL: http://ia-assistente:8090
+      # Lidos pelos módulos dos widgets "Insights" e "Investigador" (PHP,
+      # server-side). O token nunca vai para o navegador.
+      IA_ASSISTENTE_URL: http://investigador:8091
+      IA_ASSISTENTE_TOKEN: ${INVESTIGADOR_TOKEN:-}
+      INVESTIGADOR_URL: http://investigador:8091
+      INVESTIGADOR_TOKEN: ${INVESTIGADOR_TOKEN:-}
     volumes:
       # Módulo de frontend do widget "Insights" (botão "Analisar" -> Gemini).
       # Ainda precisa ser habilitado uma vez em Administration > General >
       # Modules (ou pelo "make bootstrap", que chama module.create). Veja o
       # README.
       - ./config/zabbix-widgets/insights:/usr/share/zabbix/modules/insights:ro
+      # Widget "Investigador (RCA)": habilitado pelo "make investigador-config".
+      - ./config/zabbix-widgets/investigador:/usr/share/zabbix/modules/investigador:ro
     ports:
       # Por padrão só em 127.0.0.1: acesse por túnel SSH (veja o README).
       - "${BIND_ADDR:-127.0.0.1}:${ZBX_WEB_PORT:-8080}:8080"
@@ -208,7 +217,14 @@ services:
         soft: 65536
         hard: 65536
     healthcheck:
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 10051"]
+      # Confirma processo vivo (pgrep) + porta trapper aberta (nc). De propósito
+      # NÃO faz grep no log do proxy aqui: checar "recebeu configuração do
+      # server" dentro do healthcheck seria uma leitura pesada e repetida a
+      # cada 15s, e um timeout isolado de leitura (que se autorrecupera em
+      # segundos, visto em produção) marcaria o container unhealthy sem motivo.
+      # Essa verificação mais profunda já existe em "make verificar"
+      # (scripts/verificar.sh), que roda sob demanda, não em loop.
+      test: ["CMD-SHELL", "pgrep -f zabbix_proxy >/dev/null && nc -z 127.0.0.1 10051"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -273,30 +289,111 @@ services:
     <<: *host-aws
     environment: {ZBX_HOSTNAME: host-aws-05, ZBX_ACTIVESERVERS: zabbix-proxy:10051}
 
-  # Ponte Zabbix -> Gemini (webhook de problema + widget "Insights" do
-  # dashboard). A GEMINI_API_KEY só existe aqui. Suba com: make ia-up
-  ia-assistente:
+  # Investigador de causa raiz (substitui o ia-assistente): recebe o webhook
+  # do Zabbix, coleta evidências SOMENTE LEITURA (ClickHouse readonly + API
+  # do Zabbix), mascara e, se houver GEMINI_API_KEY, consulta o Gemini. Sem
+  # chave = modo "somente evidências" (padrão). Sem porta publicada: só a
+  # rede interna do Compose o alcança. Suba com: make investigador-up
+  # (ou docker compose up -d investigador).
+  investigador:
     build: ./ferramentas
     image: zbx8lab-ferramentas:local
     profiles: ["ia"]
     restart: unless-stopped
+    command: ["python", "-m", "investigador.servidor"]
+    environment: &investigador-env
+      # Sem ":?" de propósito (profile desligado não pode bloquear "make up");
+      # o serviço avisa em runtime e recusa tudo se o token faltar.
+      INVESTIGADOR_BIND: 0.0.0.0
+      INVESTIGADOR_PORTA: "8091"
+      INVESTIGADOR_TOKEN: ${INVESTIGADOR_TOKEN:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODELO_PRE: ${GEMINI_MODELO_PRE:-gemini-3.5-flash-lite}
+      GEMINI_MODELO_PROFUNDO: ${GEMINI_MODELO_PROFUNDO:-gemini-3.8-flash}
+      INVESTIGADOR_ORCAMENTO_TOKENS_DIA: ${INVESTIGADOR_ORCAMENTO_TOKENS_DIA:-300000}
+      INVESTIGADOR_MAX_LLM_HORA: ${INVESTIGADOR_MAX_LLM_HORA:-20}
+      INVESTIGADOR_MAX_APROFUNDAR_HORA: ${INVESTIGADOR_MAX_APROFUNDAR_HORA:-10}
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_RO_USER: investigador_ro
+      CLICKHOUSE_RO_PASSWORD: ${CLICKHOUSE_RO_PASSWORD:-}
+      ZBX_API_URL: http://zabbix-web:8080/api_jsonrpc.php
+      ZBX_INVESTIGADOR_TOKEN: ${ZBX_INVESTIGADOR_TOKEN:-}
+      ZBX_FRONTEND_URL: ${ZBX_FRONTEND_URL:-http://127.0.0.1:8080}
+    volumes:
+      - investigador_dados:/dados
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8091/saude',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 128m
+    logging: *logging
+
+  # Legado (rollback): ia-assistente corrigido. Suba com: make ia-legado-up
+  ia-assistente:
+    build: ./ferramentas
+    image: zbx8lab-ferramentas:local
+    profiles: ["ia-legado"]
+    restart: unless-stopped
     command: ["python", "ia_assistente.py"]
     environment:
-      # Sem ":?" de propósito: variáveis obrigatórias em QUALQUER serviço do
-      # compose.yaml bloqueiam "make up" mesmo quando esse serviço está num
-      # profile desligado (docker compose interpola o arquivo inteiro antes
-      # de filtrar por profile). ia_assistente.py avisa em runtime se faltar.
+      IA_BIND: 0.0.0.0
+      IA_ASSISTENTE_TOKEN: ${IA_ASSISTENTE_TOKEN:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODELO: ${GEMINI_MODELO:-gemini-2.0-flash}
+      GEMINI_MODELO: ${GEMINI_MODELO:-gemini-3.5-flash-lite}
       ZBX_API_URL: http://zabbix-web:8080/api_jsonrpc.php
       ZBX_IA_API_TOKEN: ${ZBX_IA_API_TOKEN:-}
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
     mem_limit: 96m
+    logging: *logging
+
+  # --- Só para "make investigador-teste" (custo zero, nada sai da máquina) ---
+  # Mock local da Gemini API.
+  mock-gemini:
+    build: ./ferramentas
+    image: zbx8lab-ferramentas:local
+    profiles: ["investigador-teste"]
+    restart: "no"
+    command: ["python", "-m", "investigador.mock_gemini"]
+    read_only: true
+    cap_drop: ["ALL"]
+    mem_limit: 64m
+    logging: *logging
+
+  # Segunda instância do investigador apontando para o mock, com chave FALSA
+  # e banco em /tmp (não toca no cache da instância real).
+  investigador-teste:
+    build: ./ferramentas
+    image: zbx8lab-ferramentas:local
+    profiles: ["investigador-teste"]
+    restart: "no"
+    command: ["python", "-m", "investigador.servidor"]
+    environment:
+      <<: *investigador-env
+      GEMINI_API_KEY: chave-falsa-somente-para-o-mock
+      GEMINI_BASE_URL: http://mock-gemini:8099
+      INVESTIGADOR_DB: /tmp/investigador-teste.sqlite3
+      INVESTIGADOR_REQ_POR_MINUTO: "40"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,uid=10001
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
     logging: *logging
 
   # Opcional: servidor MCP do Zabbix (IA consultando o Zabbix). Desligado por
   # padrão. Suba com: make mcp-up
   zabbix-mcp-server:
-    image: zabbix/zabbix-mcp-server:${ZBX_TAG:-alpine-trunk}
+    image: zabbix/zabbix-mcp-server:${ZBX_TAG:-alpine-trunk}@sha256:bdebf20b51993ab9c3c2833ccba53ceab08b3c950794b1623708264733fcbdd1
     profiles: ["mcp"]
     restart: unless-stopped
     read_only: true
@@ -320,3 +417,4 @@ volumes:
   pgdata: {}
   chdata: {}
   proxydb: {}
+  investigador_dados: {}

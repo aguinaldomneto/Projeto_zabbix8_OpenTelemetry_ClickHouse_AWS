@@ -29,7 +29,8 @@ os dados no menu **APM** e o server consulta as mesmas tabelas com itens do tipo
 | `gerador` | construída aqui (`ferramentas/`) | Telemetria de teste |
 | `zabbix-mcp-server` | `zabbix/zabbix-mcp-server:alpine-trunk` | Opcional, desligado |
 | `host-aws-01`...`05` | `zabbix/zabbix-agent2:alpine-trunk` | Opcional (`make hosts-up`): 5 "hosts simulados" nesta VM |
-| `ia-assistente` | construída aqui (`ferramentas/`) | Opcional (`make ia-up`): ponte Zabbix → Gemini |
+| `investigador` | construída aqui (`ferramentas/investigador/`) | Opcional (`make investigador-up`): causa raiz com evidências do ClickHouse/Zabbix e Gemini opcional (veja "Investigador (Gemini)") |
+| `ia-assistente` | construída aqui (`ferramentas/`) | Legado/rollback (`make ia-legado-up`) |
 
 As APIs fictícias, o Redpanda, o gerador de tráfego e os outros 10 hosts
 simulados **não** entram aqui: rodam no seu WSL local
@@ -225,8 +226,9 @@ chave real do Gemini de ponta a ponta.
 | `bootstrap` não entra como Admin | Senha trocada pela interface | Ajustar `ZBX_ADMIN_PASSWORD` no `.env` |
 | `local-up` falha ou o tráfego não chega à VM | Porta 22 não liberada para o seu IP atual, ou o túnel caiu | `make vm-liberar-ip`; `./scripts/subir-local.sh logs tunel` |
 | Widget "Insights" não aparece para adicionar no dashboard | Módulo não habilitado | `make bootstrap` de novo, ou Administration > General > Modules > Scan directory |
-| `ia-assistente` responde "Não consegui falar com..." | Serviço não está de pé | `make ia-up` |
-| Botão "Analisar com IA" devolve erro da API do Gemini | `GEMINI_API_KEY` vazia/inválida ou nome do modelo mudou | Conferir a chave no `.env`; ajustar `GEMINI_MODELO` |
+| Widget diz "Serviço investigador indisponível" | Serviço não está de pé | `make investigador-up` |
+| Relatório em "Modo somente evidências" | `GEMINI_API_KEY` vazia (padrão), teto/orçamento atingido ou falha do Gemini | Motivo aparece no relatório; `make investigador-teste-rapido` |
+| Problema sem comentário `[RCA ...]` | action/media type desligados ou token do svc ausente | `scripts/configurar-investigador.sh --status` |
 
 ## Servidor MCP (opcional)
 
@@ -296,25 +298,14 @@ que sobraram" como balanceador das outras.
 
 ```bash
 make hosts-up   # 5 agentes leves nesta VM
-make ia-up      # ponte com o Gemini (precisa de GEMINI_API_KEY no .env)
+make investigador-up      # investigador de causa raiz (sem chave = só evidências)
+make investigador-config  # webhook, action, usuário mínimo, widget e dashboard no Zabbix
 ```
 
-A chave do Gemini (`GEMINI_API_KEY`, gerada em aistudio.google.com) e um
-token de API do Zabbix com permissão mínima (`ZBX_IA_API_TOKEN`, só
-`event.acknowledge`) vão no `.env` da VM — nunca chegam ao navegador. Dois
-usos, nos moldes do artigo
-["Integrating Zabbix with Gemini"](https://www.linkedin.com/pulse/integrating-zabbix-gemini-arian-afshar-uqm9f/):
-
-- **Webhook de problema**: configure um media type webhook (Administration
-  > Alerts > Media types) que faça `POST` para `http://ia-assistente:8090/analisar`
-  com o contexto do evento; ligue-o a uma action restrita às triggers de
-  anomalia (ver abaixo) — os triggers nativos decidem **quando** há
-  problema, o Gemini só explica **o quê** aconteceu (controla o custo de
-  chamadas à API).
-- **Widget "Insights" no dashboard**: módulo em `config/zabbix-widgets/insights/`,
-  habilitado automaticamente pelo `make bootstrap`. Adicione-o a um
-  dashboard e clique em "Analisar com IA" para um resumo dos problemas
-  recentes.
+A IA agora passa pelo serviço **investigador** — veja a seção
+[Investigador (Gemini)](#investigador-gemini). O widget "Insights"
+(`config/zabbix-widgets/insights/`) continua existindo e passou a chamar o
+investigador (com CSRF e token).
 
 ### Templates e triggers de anomalia
 
@@ -399,6 +390,101 @@ esperado; a trigger "taxa de erro 5xx alta" avalia desde o primeiro ciclo.
 > rode `make templates && make templates-status` e confira que nenhum item ficou
 > "NOT SUPPORTED".
 
+## Investigador (Gemini)
+
+Investigação de causa raiz assistida, **local e sem custo por padrão**. O
+serviço `investigador` (Python só com biblioteca padrão, 128 MB, sem porta
+publicada) junta evidências **somente leitura** e, se você configurar uma
+chave, pede hipóteses ao Gemini. Sem chave ele roda em **modo "somente
+evidências"** (estado padrão): nada sai da máquina.
+
+```
+problema (sev >= Média, tag layer=apm ou target=opentelemetry, fora de manutenção)
+   │ action "Investigador IA - pré-análise"
+   ▼
+media type webhook (JS, 10 s) ──POST /evento (Bearer)──▶ investigador ── responde < 1 s + tags rca=pre-analise, rca.servico, rca.id
+                                                            │ fila (1 worker)
+                                                            ├─ Zabbix API (svc-investigador: só .get + comentar)
+                                                            ├─ ClickHouse (investigador_ro: SELECT em otel_*, readonly=1)
+                                                            ├─ mascaramento (IPs, e-mails, CPF/CNPJ, telefones, chaves/JWT, senhas, hosts internos...)
+                                                            ├─ Gemini (opcional; JSON com esquema fixo) ou resumo heurístico
+                                                            └─ event.acknowledge action=4 (só mensagem) com resumo + link
+widget "Investigador (RCA)" ──zabbix.php (sessão + CSRF)──▶ PHP do módulo ──Bearer──▶ GET /relatorio, POST /aprofundar
+```
+
+**Fluxo híbrido** (decisão do usuário): a pré-análise curta roda sozinha
+quando o problema abre (modelo leve, `GEMINI_MODELO_PRE`, padrão
+`gemini-3.5-flash-lite`); o botão **Aprofundar** no widget roda a análise
+maior (janela de 75 min, mais evidências, `GEMINI_MODELO_PROFUNDO`, padrão
+`gemini-3.8-flash`). Cada evento é analisado **uma vez por modo** (cache).
+
+**O que é coletado** (consultas fixas e parametrizadas em
+`ferramentas/investigador/evidencias.py`; nenhum SQL vem de usuário, log ou
+modelo): evento, trigger e itens, outros problemas do host em ±30 min;
+spans/erros/p50/p95/p99 do serviço na janela, na janela anterior e em D-1;
+status HTTP; top spans com erro; logs WARN/ERROR agrupados por padrão;
+versões do serviço; frescor da ingestão.
+
+**Segurança**: mascaramento obrigatório antes de qualquer envio (placeholders
+estáveis `<IP_1>`, `<EMAIL_2>`; só contagens vão para a auditoria); logs entram
+delimitados como dados NÃO confiáveis; saída validada contra esquema
+(campos extras descartados, URLs/HTML removidos, evidências conferidas);
+links montados só pelo serviço; o serviço **nunca executa** o que o modelo
+sugere — a única escrita é o comentário no evento. Tokens comparados em tempo
+constante; chave do Gemini só no cabeçalho `x-goog-api-key`.
+
+**Custos e limites** (em `.env`): `INVESTIGADOR_MAX_LLM_HORA=20`,
+`INVESTIGADOR_MAX_APROFUNDAR_HORA=10`, `INVESTIGADOR_ORCAMENTO_TOKENS_DIA=300000`,
+backoff em 429/5xx e pausa de 10 min após 3 falhas seguidas. Estimativa com a
+chave paga: ≈ US$ 0,003 por pré-análise e ≈ US$ 0,03 por aprofundamento
+(preços de out/2026, conferir em ai.google.dev/gemini-api/docs/pricing).
+
+**Privacidade**: na **camada gratuita** do AI Studio o Google pode usar o
+conteúdo enviado para melhorar os produtos; na camada paga, não. O
+mascaramento é obrigatório e sempre ligado, mas para dados reais de produção
+use um projeto com faturamento (ou Vertex AI). Hoje o lab só tem dados
+sintéticos.
+
+### Ativar a chave (quando você decidir)
+
+1. Em <https://aistudio.google.com/apikey>, **Create API key** (de preferência
+   num projeto com faturamento e restrita à "Generative Language API").
+2. No WSL, edite o `.env` (`nano ~/zabbix8-telemetria-lab/.env`) e preencha
+   `GEMINI_API_KEY=` **direto no arquivo**. Não cole a chave no chat, em issue
+   ou em commit (o `.env` é ignorado pelo Git e tem permissão 600).
+3. `docker compose up -d investigador` (ou `make investigador-up`).
+4. Confira: `docker compose exec investigador python -c "import urllib.request,os;print(urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8091/saude',headers={'Authorization':'Bearer '+os.environ['INVESTIGADOR_TOKEN']})).read().decode())"`
+   deve mostrar `"modo": "llm"`. Os modelos e limites da sua conta aparecem
+   no AI Studio (a página de rate limits não publica números fixos).
+
+Para **desligar** a IA: apague o valor de `GEMINI_API_KEY` e rode
+`docker compose up -d investigador` (volta ao modo somente evidências).
+
+### Comandos
+
+| Comando | O que faz |
+|---|---|
+| `make investigador-up` / `-down` | sobe/para o serviço (cache e auditoria ficam no volume `investigador_dados`) |
+| `make investigador-config` | cria/atualiza no Zabbix: macros `{$INVESTIGADOR.URL}`/`{$INVESTIGADOR.TOKEN}` (secreta), media type, papel mínimo, grupo e usuário `svc-investigador` (+ token no `.env`), action, módulo do widget e dashboard "Investigador IA (RCA)" |
+| `make investigador-desligar` | desliga action + media type (nada é apagado); `scripts/configurar-investigador.sh --ligar` religa |
+| `make investigador-teste` | testes unitários + ponta a ponta com **mock do Gemini** (dispara um incidente real baixando por alguns minutos o limiar de 5xx do host `pedidos`) |
+| `make investigador-teste-rapido` | o mesmo sem disparar incidente |
+
+Alternativa **manual sem API**: no widget, "Copiar resumo para o Gemini"
+copia o texto **já mascarado**; cole em <https://gemini.google.com/app>.
+
+### Reverter
+
+- Zabbix: `make investigador-remover` (apaga action, media type, usuário e
+  token, grupo, papel, macros, módulo e dashboard criados).
+- Serviço: `make investigador-down`; volume: `docker volume rm zbx8lab_investigador_dados`.
+- ClickHouse readonly: remova a linha `users.d/investigador-ro.xml` e a
+  variável `CLICKHOUSE_RO_PASSWORD` do serviço `clickhouse` no `compose.yaml`
+  e rode `docker compose up -d --no-deps clickhouse` (dados preservados).
+- Código: `git checkout p1-endurecimento` (branch anterior); cópias dos
+  arquivos alterados em `.backup-p1/` (sufixo `.5`).
+- Legado: `make ia-legado-up` sobe o `ia-assistente` corrigido.
+
 ## Backup agendado
 
 - **Quando:** todo dia às 02:30 (cron do usuário `suporte` no WSL), mais uma entrada `@reboot` que,
@@ -439,7 +525,11 @@ config/proxy/                     configuração do proxy com o coletor OpenTele
 config/zabbix-agent/              item de latência dos hosts simulados (UserParameter)
 config/nginx/                     balanceadores das APIs fictícias (lb-01, lb-02)
 config/zabbix-templates/          templates "APM API fictícia", "OTel ClickHouse APM" e "Host simulado" (make templates importa)
-config/zabbix-widgets/insights/   módulo do widget "Insights" (botão "Analisar" -> Gemini)
-ferramentas/                      gerador, bootstrap, APIs fictícias, tráfego e ia-assistente
+config/zabbix-widgets/insights/   módulo do widget "Insights" (botão "Analisar" -> investigador)
+config/zabbix-widgets/investigador/ módulo do widget "Investigador (RCA)" + página do relatório
+config/zabbix-investigador/       media type webhook, action, papel/usuário mínimos (make investigador-config)
+config/clickhouse/users.d/        usuário readonly investigador_ro do ClickHouse
+ferramentas/                      gerador, bootstrap, APIs fictícias, tráfego, ia-assistente (legado)
+ferramentas/investigador/         serviço investigador, mascaramento, mock do Gemini e testes
 scripts/                          gerar-env, preflight, verificar, subir-tudo, subir-local e deploy-aws
 ```

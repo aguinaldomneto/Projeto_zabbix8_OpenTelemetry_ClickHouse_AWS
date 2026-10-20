@@ -11,7 +11,7 @@ if [ "${1:-}" = "--diagnostico" ]; then
   "$0" 2>&1 | tee "$arquivo"
   {
     echo; echo "===== docker compose ps"; docker compose ps -a
-    for s in zabbix-proxy zabbix-server zabbix-web clickhouse gerador ia-assistente; do
+    for s in zabbix-proxy zabbix-server zabbix-web clickhouse gerador investigador ia-assistente; do
       [ -n "$(docker compose ps -q "$s" 2>/dev/null)" ] || continue
       echo; echo "===== logs: $s (últimas 60 linhas)"
       docker compose logs --no-color --tail 60 "$s" 2>&1
@@ -64,7 +64,7 @@ done
 
 echo "== 2. ClickHouse"
 versao=$(ch "SELECT version()")
-if printf '%s' "$versao" | grep -qE '^[0-9]+\.[0-9]+'; then
+if grep -qE '^[0-9]+\.[0-9]+' <<< "$versao"; then
   maior=${versao%%.*}; resto=${versao#*.}; menor=${resto%%.*}
   if [ "$maior" -gt 26 ] || { [ "$maior" -eq 26 ] && [ "$menor" -ge 8 ]; }; then
     ok "versão $versao (26.8 ou mais novo, aceita as datas gravadas pelo proxy)"
@@ -80,16 +80,16 @@ fi
 
 echo "== 3. Proxy"
 log_proxy=$(docker compose logs --no-color zabbix-proxy 2>&1)
-if printf '%s' "$log_proxy" | grep -qiE 'unknown parameter|cannot.*(open|load).*conf|invalid.*APM'; then
+if grep -qiE 'unknown parameter|cannot.*(open|load).*conf|invalid.*APM' <<< "$log_proxy"; then
   falha "o proxy reclamou da configuração:"
   printf '%s\n' "$log_proxy" | grep -iE 'unknown parameter|cannot.*(open|load).*conf|invalid.*APM' | tail -3 | sed 's/^/            /'
 fi
-if printf '%s' "$log_proxy" | grep -qiE 'apm (manager|worker)'; then
+if grep -qiE 'apm (manager|worker)' <<< "$log_proxy"; then
   ok "processos do coletor OpenTelemetry (apm manager/worker) iniciados"
 else
   falha "não achei os processos 'apm manager' no log do proxy (StartAPMCollectors não entrou?)"
 fi
-if printf '%s' "$log_proxy" | grep -qiE 'received configuration data from server'; then
+if grep -qiE 'received configuration data from server' <<< "$log_proxy"; then
   ok "o proxy recebeu configuração do server"
 else
   falha "o proxy ainda não recebeu configuração do server (rodou 'make bootstrap'? o nome do proxy bate com ZBX_PROXY_NAME?)"
@@ -102,7 +102,7 @@ for par in "otel_traces:Timestamp:spans" "otel_logs:Timestamp:logs" "otel_metric
            "otel_metrics_gauge:TimeUnix:pontos de gauge" "otel_metrics_histogram:TimeUnix:pontos de histograma"; do
   tabela=${par%%:*}; resto=${par#*:}; coluna=${resto%%:*}; nome=${resto#*:}
   n=$(ch "SELECT count() FROM $tabela WHERE $coluna > now() - INTERVAL 5 MINUTE")
-  if printf '%s' "$n" | grep -qE '^[0-9]+$'; then
+  if grep -qE '^[0-9]+$' <<< "$n"; then
     info "$tabela: $n $nome"
     total=$((total + n))
   else
@@ -118,7 +118,7 @@ else
 fi
 
 erros=$(ch "SELECT concat(toString(count()), ' em ', table, ': ', any(substring(exception, 1, 160))) FROM system.asynchronous_insert_log WHERE event_time > now() - INTERVAL 10 MINUTE AND status != 'Ok' GROUP BY table")
-if [ -n "$erros" ] && ! printf '%s' "$erros" | grep -qiE "doesn.t exist|UNKNOWN_TABLE"; then
+if [ -n "$erros" ] && ! grep -qiE "doesn.t exist|UNKNOWN_TABLE" <<< "$erros"; then
   falha "o ClickHouse recusou inserções nos últimos 10 minutos:"
   printf '%s\n' "$erros" | sed 's/^/            /'
 else
@@ -137,15 +137,20 @@ fi
 
 echo "== 6. Serviços opcionais (hosts simulados, IA) — só os que estiverem de pé"
 algum_opcional=0
-for s in host-aws-01 host-aws-02 host-aws-03 host-aws-04 host-aws-05 ia-assistente; do
+for s in host-aws-01 host-aws-02 host-aws-03 host-aws-04 host-aws-05 investigador ia-assistente; do
   id=$(docker compose ps -q "$s" 2>/dev/null)
   [ -n "$id" ] || continue
   algum_opcional=1
-  estado=$(docker inspect -f '{{.State.Status}}' "$id")
-  if [ "$estado" = running ]; then ok "$s: $estado"; else falha "$s: $estado"; fi
+  estado=$(docker inspect -f '{{.State.Status}}{{if .State.Health}} / {{.State.Health.Status}}{{end}}' "$id")
+  case "$estado" in running|"running / healthy") ok "$s: $estado" ;; *) falha "$s: $estado" ;; esac
 done
+if [ -n "$(docker compose ps -q investigador 2>/dev/null)" ]; then
+  # Só o modo (llm / somente-evidencias); o token fica dentro do container.
+  modo=$(docker compose exec -T investigador python -c "import urllib.request,os,json;r=urllib.request.Request('http://127.0.0.1:8091/saude',headers={'Authorization':'Bearer '+os.environ.get('INVESTIGADOR_TOKEN','')});d=json.load(urllib.request.urlopen(r,timeout=5));print(d.get('modo','?'),'tokens_hoje='+str(d.get('tokens_hoje','?')))" 2>/dev/null)
+  info "investigador: modo ${modo:-desconhecido}"
+fi
 if [ "$algum_opcional" = 0 ]; then
-  info "nenhum (rode 'make hosts-up' / 'make ia-up' se quiser os hosts simulados desta VM e a ponte com o Gemini)"
+  info "nenhum (rode 'make hosts-up' / 'make investigador-up' se quiser os hosts simulados desta VM e o investigador)"
 fi
 
 echo "== Memória por container"

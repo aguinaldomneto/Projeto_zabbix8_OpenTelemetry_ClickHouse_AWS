@@ -15,11 +15,8 @@ fixados no `compose.yaml` no formato `imagem:tag@sha256:...` (a tag continua leg
 | `redpandadata/redpanda:latest` (compose.local.yaml) | `sha256:c98c2f04a751e6646012cc701bac5183252cee44c88ba1dfa412e4c7124f2e89` |
 | `nginx:alpine` (compose.local.yaml) | `sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2` |
 | `zbx8lab-ferramentas:local` | imagem construída localmente (sem digest de registro; id `f4366a1f2088...`) |
-
-## Pendentes (não estavam baixadas localmente)
-
-- `zabbix/zabbix-mcp-server:${ZBX_TAG:-alpine-trunk}` (perfil `mcp`): fixar quando a imagem for baixada (`make mcp-up`).
-- `python:3.13-slim` (base de `ferramentas/Dockerfile`): fixar por digest quando a base estiver baixada.
+| `zabbix/zabbix-mcp-server:alpine-trunk` (perfil `mcp`) | `sha256:bdebf20b51993ab9c3c2833ccba53ceab08b3c950794b1623708264733fcbdd1` |
+| `python:3.13-slim` (base de `ferramentas/Dockerfile`) | `sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f` |
 
 ## Como atualizar digests (bump)
 
