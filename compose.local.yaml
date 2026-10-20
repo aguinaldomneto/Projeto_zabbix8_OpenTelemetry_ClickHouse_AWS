@@ -1,0 +1,236 @@
+# Sobe no WSL local (NÃO na VM da AWS): 5 APIs fictícias, Redpanda, o
+# gerador de tráfego e 10 containers de "host simulado". Fica de fora da
+# VM de 4GB do laboratório de propósito — ver a seção "Infra" do README.
+#
+# Nada é exposto na internet: o serviço "tunel" abre um túnel SSH até a VM
+# (porta 22, liberada só para o seu IP) e encaminha o OTLP (4317) e o trapper
+# (10051), que na VM ficam presos em 127.0.0.1. As APIs e os hosts simulados
+# falam com "tunel:<porta>". Precisa do IP público atual da VM (ele muda a
+# cada vez que ela liga) e da chave SSH, ambos gravados no .env.local por
+# scripts/subir-local.sh. Uso: make local-up (ou, à mão, depois de gerar .env.local:
+# docker compose -f compose.local.yaml --env-file .env.local up -d).
+
+name: zbx8lab-local
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-otel: &otel
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://tunel:${OTLP_PORT:-4317}
+
+x-agente: &agente
+  image: zabbix/zabbix-agent2:alpine-trunk@sha256:83564398cddf59bfd9907c5bc89991fbdc746a7d77d820023e8d2b4d5d5449b1
+  restart: unless-stopped
+  volumes:
+    - ./config/zabbix-agent/latencia.conf:/etc/zabbix/zabbix_agent2.d/latencia.conf:ro
+    - ./config/zabbix-agent/latencia.sh:/etc/zabbix/scripts/latencia.sh:ro
+  mem_limit: 32m
+  logging: *logging
+
+services:
+  tunel:
+    image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+    restart: unless-stopped
+    # O resolvedor do WSL falha de vez em quando dentro dos containers e o
+    # "apk add" abaixo precisa de DNS; o túnel só fala com um IP literal.
+    dns: [8.8.8.8, 1.1.1.1]
+    command:
+      - sh
+      - -c
+      - >-
+        apk add -q --no-cache openssh-client &&
+        exec ssh -N -i /chave
+        -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new
+        -o UserKnownHostsFile=/tmp/known_hosts
+        -o ExitOnForwardFailure=yes -o ServerAliveInterval=30
+        -L 0.0.0.0:${OTLP_PORT:-4317}:127.0.0.1:${OTLP_PORT:-4317}
+        -L 0.0.0.0:${ZBX_TRAPPER_PORT:-10051}:127.0.0.1:${ZBX_TRAPPER_PORT:-10051}
+        ${SSH_USER:-ubuntu}@${VM_IP:?rode "make local-up" para descobrir o IP da VM, ou defina VM_IP à mão}
+    volumes:
+      - ${SSH_KEY:?rode "make local-up" para descobrir a chave SSH, ou defina SSH_KEY à mão}:/chave:ro
+    mem_limit: 32m
+    logging: *logging
+
+  redpanda:
+    image: redpandadata/redpanda:latest@sha256:c98c2f04a751e6646012cc701bac5183252cee44c88ba1dfa412e4c7124f2e89
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    # Single-node de teste: folga maior porque, diferente da VM da AWS, o
+    # WSL local não tem o mesmo orçamento apertado de memória.
+    mem_limit: 1g
+    logging: *logging
+
+  pedidos:
+    build: ./ferramentas
+    image: zbx8lab-ferramentas:local
+    restart: unless-stopped
+    depends_on: [redpanda]
+    command: ["python", "api_ficticia.py"]
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: pedidos
+      API_NOME: pedidos
+      API_PORT: "8080"
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_TOPICO_PEDIDO: pedido-criado
+    mem_limit: 96m
+    logging: *logging
+
+  pagamentos:
+    build: ./ferramentas
+    image: zbx8lab-ferramentas:local
+    restart: unless-stopped
+    depends_on: [redpanda, pedidos]
+    command: ["python", "api_ficticia.py"]
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: pagamentos
+      API_NOME: pagamentos
+      API_PORT: "8080"
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_TOPICO_PEDIDO: pedido-criado
+      WEBHOOK_PEDIDOS_URL: http://pedidos:8080/confirmar
+    mem_limit: 96m
+    logging: *logging
+
+  catalogo:
+    build: ./ferramentas
+    image: zbx8lab-ferramentas:local
+    restart: unless-stopped
+    command: ["python", "api_ficticia.py"]
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: catalogo
+      API_NOME: catalogo
+      API_PORT: "8080"
+    mem_limit: 64m
+    logging: *logging
+
+  streaming:
+    build: ./ferramentas
+    image: zbx8lab-ferramentas:local
+    restart: unless-stopped
+    command: ["python", "api_ficticia.py"]
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: streaming
+      API_NOME: streaming
+      API_PORT: "8080"
+      API_LATENCIA_MEDIANA_MS: "120"
+    mem_limit: 64m
+    logging: *logging
+
+  autenticacao:
+    build: ./ferramentas
+    image: zbx8lab-ferramentas:local
+    restart: unless-stopped
+    command: ["python", "api_ficticia.py"]
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: autenticacao
+      API_NOME: autenticacao
+      API_PORT: "8080"
+      API_LATENCIA_MEDIANA_MS: "30"
+    mem_limit: 64m
+    logging: *logging
+
+  # Cliente das 5 APIs (via os LBs abaixo). Sempre rodando, taxa moderada:
+  # acumula milhões de registros em alguns dias sem sufocar a máquina.
+  trafego:
+    build: ./ferramentas
+    image: zbx8lab-ferramentas:local
+    restart: unless-stopped
+    depends_on: [lb-01, lb-02]
+    command: ["python", "trafego.py"]
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: trafego
+      TRAFEGO_REQ_S: ${TRAFEGO_REQ_S:-3}
+    mem_limit: 96m
+    logging: *logging
+
+  # Pico de carga sob demanda. Rode com: make gera-carga-de-estresse
+  trafego-estresse:
+    build: ./ferramentas
+    image: zbx8lab-ferramentas:local
+    profiles: ["stress"]
+    restart: "no"
+    depends_on: [lb-01, lb-02]
+    command: ["python", "trafego.py"]
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: trafego-estresse
+      TRAFEGO_MODO: estresse
+      ESTRESSE_CONCORRENCIA: ${ESTRESSE_CONCORRENCIA:-20}
+      ESTRESSE_DURACAO_S: ${ESTRESSE_DURACAO_S:-60}
+    mem_limit: 128m
+    logging: *logging
+
+  # Balanceadores: fazem o papel das máquinas "que sobraram" (host-local-09
+  # e 10 abaixo monitoram cada um o seu nginx via item HTTP de stub_status).
+  lb-01:
+    image: nginx:alpine@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
+    restart: unless-stopped
+    depends_on: [pedidos, pagamentos]
+    volumes:
+      - ./config/nginx/lb-01.conf:/etc/nginx/conf.d/default.conf:ro
+    mem_limit: 24m
+    logging: *logging
+
+  lb-02:
+    image: nginx:alpine@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
+    restart: unless-stopped
+    depends_on: [catalogo, streaming, autenticacao]
+    volumes:
+      - ./config/nginx/lb-02.conf:/etc/nginx/conf.d/default.conf:ro
+    mem_limit: 24m
+    logging: *logging
+
+  # 10 "hosts simulados": agentes Zabbix em modo ativo, cada um com um nome
+  # único. Reportam filesystem (vfs.fs.*) e rede (net.if.*) de fábrica; a
+  # latência de rede é feita pelo lado do zabbix-proxy (item nativo
+  # icmppingsec[], sem precisar de nada extra aqui).
+  host-local-01:
+    <<: *agente
+    environment: {ZBX_HOSTNAME: host-local-01, ZBX_ACTIVESERVERS: "tunel:${ZBX_TRAPPER_PORT:-10051}"}
+  host-local-02:
+    <<: *agente
+    environment: {ZBX_HOSTNAME: host-local-02, ZBX_ACTIVESERVERS: "tunel:${ZBX_TRAPPER_PORT:-10051}"}
+  host-local-03:
+    <<: *agente
+    environment: {ZBX_HOSTNAME: host-local-03, ZBX_ACTIVESERVERS: "tunel:${ZBX_TRAPPER_PORT:-10051}"}
+  host-local-04:
+    <<: *agente
+    environment: {ZBX_HOSTNAME: host-local-04, ZBX_ACTIVESERVERS: "tunel:${ZBX_TRAPPER_PORT:-10051}"}
+  host-local-05:
+    <<: *agente
+    environment: {ZBX_HOSTNAME: host-local-05, ZBX_ACTIVESERVERS: "tunel:${ZBX_TRAPPER_PORT:-10051}"}
+  host-local-06:
+    <<: *agente
+    environment: {ZBX_HOSTNAME: host-local-06, ZBX_ACTIVESERVERS: "tunel:${ZBX_TRAPPER_PORT:-10051}"}
+  host-local-07:
+    <<: *agente
+    environment: {ZBX_HOSTNAME: host-local-07, ZBX_ACTIVESERVERS: "tunel:${ZBX_TRAPPER_PORT:-10051}"}
+  host-local-08:
+    <<: *agente
+    environment: {ZBX_HOSTNAME: host-local-08, ZBX_ACTIVESERVERS: "tunel:${ZBX_TRAPPER_PORT:-10051}"}
+  host-local-09:
+    <<: *agente
+    depends_on: [lb-01]
+    environment: {ZBX_HOSTNAME: host-local-09, ZBX_ACTIVESERVERS: "tunel:${ZBX_TRAPPER_PORT:-10051}"}
+  host-local-10:
+    <<: *agente
+    depends_on: [lb-02]
+    environment: {ZBX_HOSTNAME: host-local-10, ZBX_ACTIVESERVERS: "tunel:${ZBX_TRAPPER_PORT:-10051}"}
