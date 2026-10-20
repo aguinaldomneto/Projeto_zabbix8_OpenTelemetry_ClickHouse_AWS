@@ -92,7 +92,6 @@ class Widget extends CWidget {
 
 		$bruto = curl_exec($ch);
 		$status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-		curl_close($ch);
 
 		if ($bruto === false) {
 			return ['status' => 0, 'dados' => ['erro' => _('Serviço investigador indisponível (make investigador-up).')]];
