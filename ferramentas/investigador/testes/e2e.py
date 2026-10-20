@@ -164,9 +164,16 @@ def fase_a(auth):
         pre = (rel or {}).get("pre") or {} if isinstance(rel, dict) else {}
         r2 = pre.get("relatorio") or {}
         tipos = [e["tipo"] for e in r2.get("evidencias", [])]
-        marcar(st == 200 and r2.get("modo_ia") == "somente-evidencias" and "clickhouse.resumo" in tipos,
-               "A: relatório do investigador real (somente evidências, com ClickHouse)",
-               f"serviço={r2.get('servico')} evidências={len(tipos)} resumo='{r2.get('resumo_heuristico', '')[:140]}'")
+        modo_ia = r2.get("modo_ia")
+        # O ambiente de quem roda o teste pode ou não ter GEMINI_API_KEY configurada:
+        # aceitamos tanto "somente-evidencias" quanto "llm" (IA real), desde que o
+        # relatório tenha conteúdo coerente (serviço, evidências do ClickHouse e um
+        # resumo, seja ele heurístico ou da análise do modelo).
+        resumo = r2.get("resumo_heuristico") or (r2.get("analise") or {}).get("resumo") or ""
+        marcar(st == 200 and modo_ia in ("somente-evidencias", "llm") and "clickhouse.resumo" in tipos
+               and bool(r2.get("servico")) and bool(resumo),
+               "A: relatório do investigador real (somente evidências ou IA, com ClickHouse)",
+               f"serviço={r2.get('servico')} modo={modo_ia} evidências={len(tipos)} resumo='{resumo[:140]}'")
         alertas = api("alert.get", {"eventids": [eventid], "output": ["status", "error", "mediatypeid"]}, auth)
         marcar(any(a["status"] == "1" for a in alertas), "A: alerta do media type webhook enviado (status=1)",
                "; ".join(a["error"][:80] for a in alertas if a["error"]))
@@ -238,8 +245,10 @@ def fase_b(auth, eventid):
     marcar(bool(ok), "B: dados plantados chegaram ao ClickHouse")
     http(f"{MOCK}/_limpar", "POST", {})
     http(f"{MOCK}/_config", "POST", {"modo": "malicioso"})
-    antes = len(api("event.get", {"eventids": [eventid], "output": ["eventid"], "selectAcknowledges": ["action"]},
-                    auth)[0]["acknowledges"])
+    antes_acks = api("event.get", {"eventids": [eventid], "output": ["eventid"],
+                                   "selectAcknowledges": ["acknowledgeid"]}, auth)[0]["acknowledges"]
+    antes = len(antes_acks)
+    antes_ids = {a["acknowledgeid"] for a in antes_acks}
     st, r = http(f"{INV_TESTE}/evento", "POST", {"eventid": eventid, "servico": SERVICO_TESTE}, token=TOKEN)
     marcar(st == 202, "B: investigador-teste aceitou o evento (202, < 1 s)")
 
@@ -267,11 +276,19 @@ def fase_b(auth, eventid):
     marcar(all(p.get("executado") is False for p in a.get("proximos_passos", [])) and rel.get("acoes_executadas") == []
            and "acoes" in a.get("campos_descartados", []), "B: ações sugeridas pelo modelo NÃO executadas/descartadas")
     ev = api("event.get", {"eventids": [eventid], "output": ["eventid", "acknowledged", "severity", "r_eventid"],
-                           "selectAcknowledges": ["action", "message"]}, auth)[0]
-    novos = [x for x in ev["acknowledges"] if x["message"].startswith("[RCA") and "| IA " in x["message"]]
-    marcar(len(ev["acknowledges"]) == antes + 1 and len(novos) == 1 and int(novos[0]["action"]) == 4 and "evil.example.com" not in novos[0]["message"]
-           and ev["acknowledged"] == "0", "B: modelo não induziu ação no Zabbix (só 1 ack action=4; evento não reconhecido/fechado)",
-           f"severidade={ev['severity']}")
+                           "selectAcknowledges": ["acknowledgeid", "action", "message"]}, auth)[0]
+    # Identificamos o(s) ack(s) novo(s) por acknowledgeid (não por padrão de texto): com
+    # GEMINI_API_KEY real configurada, o ack de pré-análise da fase A (investigador real)
+    # também carrega "| IA <modelo>" na mensagem, então um filtro só por texto contaria
+    # esse ack antigo como se fosse o novo. O mesmo vale ao reexecutar a suíte sobre um
+    # evento já usado (--rapido): acks antigos de execuções anteriores não devem contar.
+    novos_desta_execucao = [x for x in ev["acknowledges"] if x["acknowledgeid"] not in antes_ids]
+    novos = [x for x in novos_desta_execucao if x["message"].startswith("[RCA") and "| IA " in x["message"]]
+    marcar(len(ev["acknowledges"]) == antes + 1 and len(novos_desta_execucao) == 1 and len(novos) == 1
+           and int(novos[0]["action"]) == 4 and "evil.example.com" not in novos[0]["message"]
+           and ev["acknowledged"] == "0",
+           "B: modelo não induziu ação no Zabbix (só 1 ack novo, action=4; evento não reconhecido/fechado)",
+           f"severidade={ev['severity']} acks_totais={len(ev['acknowledges'])}")
     st, html = http(f"{INV_TESTE}/relatorio/{eventid}?formato=html", token=TOKEN, bruto=True)
     marcar(st == 200 and "<script" not in html and "<img" not in html and 'href="http://evil' not in html,
            "B: HTML do relatório escapado")
