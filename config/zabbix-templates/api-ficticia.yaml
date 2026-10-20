@@ -1,0 +1,306 @@
+zabbix_export:
+  version: '8.0'
+  template_groups:
+    - uuid: 5008fede2f8045fdbc73e49bbb967951
+      name: 'Templates/Lab Zabbix 8 + OpenTelemetry'
+  templates:
+    - uuid: e93ba37ffca949299bf3304d4b7127eb
+      template: 'APM API ficticia'
+      name: 'APM API fictícia'
+      description: 'Métricas das APIs fictícias (pedidos, pagamentos, catalogo, streaming, autenticacao) com itens nativos ''Telemetry query'' (type 24) sobre otel_traces. Padrão mestre agrupado + dependentes: neste trunk do Zabbix 8 o campo query NÃO expande macros ({$...} nem {#...}), então os dois itens mestres fazem GROUP BY ServiceName (e código HTTP) e devolvem uma linha JSON por grupo; os itens dependentes filtram o serviço do host no pré-processamento (JSONPath com {$API_SERVICE}), onde macros funcionam. Vincule a um host monitorado pelo proxy com coleta APM e ajuste a macro {$API_SERVICE}.'
+      groups:
+        - name: 'Templates/Lab Zabbix 8 + OpenTelemetry'
+      items:
+        - uuid: 7d1c0e5a3b9f4a6e8c2d1f0a9b8c7d61
+          name: 'API: requisições por serviço e status HTTP (bruto)'
+          type: TELEMETRY_QUERY
+          key: apm.api.status.raw
+          history: 1d
+          value_type: TEXT
+          description: 'GROUP BY ServiceName, http.response.status_code dos spans Server, por minuto: uma linha JSON por par. Mestre dos itens de requisições e erros (o filtro por serviço é feito nos dependentes, porque macros não são expandidas dentro do query).'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+          time_shift: '{$API.TIME_SHIFT}'
+          lookback_limit: '{$API.LOOKBACK}'
+          granularity: 1m
+          query:
+            columns:
+              - column: ServiceName
+              - column: SpanAttributes
+                attribute_key: http.response.status_code
+            aggregated_columns:
+              - alias: spans
+            filter:
+              evaltype: AND
+              conditions:
+                - column: SpanKind
+                  value: Server
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+        - uuid: 2e8b6a4c1d7f4b3a9e5c0d2f1a3b4c52
+          name: 'API: latência por serviço (bruto)'
+          type: TELEMETRY_QUERY
+          key: apm.api.latencia.raw
+          history: 1d
+          value_type: TEXT
+          description: 'GROUP BY ServiceName dos spans Server, por minuto: média e p95 de Duration (ns). Mestre dos itens de latência.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+          time_shift: '{$API.TIME_SHIFT}'
+          lookback_limit: '{$API.LOOKBACK}'
+          granularity: 1m
+          query:
+            columns:
+              - column: ServiceName
+            aggregated_columns:
+              - alias: spans
+              - function: AVG
+                column: Duration
+                alias: duracao_media_ns
+              - function: PERCENTILE
+                column: Duration
+                parameters:
+                  - '95'
+                alias: p95_ns
+            filter:
+              evaltype: AND
+              conditions:
+                - column: SpanKind
+                  value: Server
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+        - uuid: 5f3a9c7e1b2d4e6a8c0b9d1e2f3a4b73
+          name: 'Requisições (linha por status, por minuto)'
+          type: DEPENDENT
+          key: apm.requisicoes.row
+          history: 7d
+          units: req
+          description: 'Contagem de requisições do serviço {$API_SERVICE} por linha de status HTTP a cada minuto; base das somas abaixo.'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  return JSON.stringify([JSON.parse(value).columns]);
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.ServiceName == "{$API_SERVICE}")].spans.first()'
+              error_handler: DISCARD_VALUE
+          master_item:
+            key: apm.api.status.raw
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+        - uuid: 9a4d2b6e8c1f4a3d9b5e0c9f1a2b3c84
+          name: 'Erros 5xx (linha por status, por minuto)'
+          type: DEPENDENT
+          key: apm.erros5xx.row
+          history: 7d
+          units: req
+          description: 'Requisições com status HTTP >= 500 do serviço {$API_SERVICE} por linha de status (0 nas demais linhas, o que garante zeros na soma).'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var c = JSON.parse(value).columns;
+                  var st = 0;
+                  for (var k in c) { if (k.indexOf('status_code') >= 0) { st = parseInt(c[k], 10); } }
+                  c.erros5xx = (st >= 500) ? c.spans : 0;
+                  return JSON.stringify([c]);
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.ServiceName == "{$API_SERVICE}")].erros5xx.first()'
+              error_handler: DISCARD_VALUE
+          master_item:
+            key: apm.api.status.raw
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+        - uuid: c6e1a8d3f5b24c7e9a0b2d4f6e8a1c95
+          name: 'Erros 4xx (linha por status, por minuto)'
+          type: DEPENDENT
+          key: apm.erros4xx.row
+          history: 7d
+          units: req
+          description: 'Requisições com status HTTP 400-499 do serviço {$API_SERVICE} por linha de status (0 nas demais linhas).'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var c = JSON.parse(value).columns;
+                  var st = 0;
+                  for (var k in c) { if (k.indexOf('status_code') >= 0) { st = parseInt(c[k], 10); } }
+                  c.erros4xx = (st >= 400 && st < 500) ? c.spans : 0;
+                  return JSON.stringify([c]);
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.ServiceName == "{$API_SERVICE}")].erros4xx.first()'
+              error_handler: DISCARD_VALUE
+          master_item:
+            key: apm.api.status.raw
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+        - uuid: a107c32da38b481195a67a661b7ab767
+          name: 'Erros 5xx (contagem/h)'
+          type: CALCULATED
+          key: apm.erros5xx
+          delay: 1m
+          units: req
+          params: 'sum(//apm.erros5xx.row,1h)'
+          description: 'Requisições com status 5xx do serviço {$API_SERVICE} na última hora (soma móvel das linhas por minuto).'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '-1'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '0'
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+          triggers:
+            - uuid: 59ca46d085c64249a6faac42f17b47dc
+              expression: 'baselinedev(/APM API ficticia/apm.erros5xx,1h:now/h,"d",7)>3'
+              name: 'Pico de erros 5xx fora do padrão'
+              priority: AVERAGE
+              description: 'Desvio de mais de 3 sigmas sobre a média da mesma hora nos últimos 7 dias.'
+        - uuid: 1b7d5f3a9c2e4d6b8a0c1e3f5a7b9d06
+          name: 'Taxa de erro 5xx (5m)'
+          type: CALCULATED
+          key: apm.erro.pct
+          delay: 1m
+          value_type: FLOAT
+          units: '%'
+          params: '100*sum(//apm.erros5xx.row,5m)/sum(//apm.requisicoes.row,5m)'
+          description: 'Requisições 5xx / total do serviço {$API_SERVICE} nos últimos 5 minutos.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '-1'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '0'
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+          triggers:
+            - uuid: 3c9e7a5b1d4f4a2c8e6b0d9f1a3c5e17
+              expression: 'min(/APM API ficticia/apm.erro.pct,3m)>{$API.ERRO.PCT.WARN}'
+              recovery_mode: RECOVERY_EXPRESSION
+              recovery_expression: 'max(/APM API ficticia/apm.erro.pct,3m)<{$API.ERRO.PCT.RECOVERY}'
+              name: 'API {$API_SERVICE}: taxa de erro 5xx alta (>{$API.ERRO.PCT.WARN}%)'
+              opdata: 'Erro: {ITEM.LASTVALUE1}'
+              priority: AVERAGE
+              description: 'Taxa de erro 5xx acima do limite em todas as coletas de 3 minutos (padrão da API fictícia: ~2%).'
+              tags:
+                - tag: layer
+                  value: apm
+                - tag: scope
+                  value: errors
+        - uuid: b0a907d9a1e746578401ac60a663a58d
+          name: 'Latência média'
+          type: DEPENDENT
+          key: apm.latencia.media
+          value_type: FLOAT
+          units: ns
+          description: 'Média de Duration dos spans Server do serviço {$API_SERVICE} por minuto (ns).'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  return JSON.stringify([JSON.parse(value).columns]);
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.ServiceName == "{$API_SERVICE}")].duracao_media_ns.first()'
+              error_handler: DISCARD_VALUE
+          master_item:
+            key: apm.api.latencia.raw
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+        - uuid: 8e2c4a6b0d1f4e3a9c7b5d1f3a5c7e28
+          name: 'Latência p95'
+          type: DEPENDENT
+          key: apm.latencia.p95
+          value_type: FLOAT
+          units: ns
+          description: 'Percentil 95 de Duration dos spans Server do serviço {$API_SERVICE} por minuto (ns).'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  return JSON.stringify([JSON.parse(value).columns]);
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.ServiceName == "{$API_SERVICE}")].p95_ns.first()'
+              error_handler: DISCARD_VALUE
+          master_item:
+            key: apm.api.latencia.raw
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+        - uuid: d4f6a8c0e2b14a5c9e7d3b1f5a7c9e39
+          name: 'Requisições por minuto (média 5m)'
+          type: CALCULATED
+          key: apm.requisicoes.rate
+          delay: 1m
+          value_type: FLOAT
+          units: req/min
+          params: 'sum(//apm.requisicoes.row,5m)/5'
+          description: 'Total de requisições do serviço {$API_SERVICE} nos últimos 5 minutos / 5.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '-1'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '0'
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+      tags:
+        - tag: class
+          value: application
+        - tag: target
+          value: opentelemetry
+      macros:
+        - macro: '{$API.ERRO.PCT.RECOVERY}'
+          value: '5'
+          description: 'Taxa de erro 5xx (%) abaixo da qual o problema fecha (histerese).'
+        - macro: '{$API.ERRO.PCT.WARN}'
+          value: '10'
+          description: 'Taxa de erro 5xx (%) que abre problema.'
+        - macro: '{$API.LOOKBACK}'
+          value: 10m
+          description: 'Limite de retrocesso quando a última coleta falhou ou é antiga.'
+        - macro: '{$API.TIME_SHIFT}'
+          value: 30s
+          description: 'Atraso da janela de processamento (dá tempo ao proxy de gravar no ClickHouse).'
+        - macro: '{$API_SERVICE}'
+          value: pedidos
+          description: 'Nome do serviço (service.name) filtrado nos itens dependentes. Sobrescreva na macro do host.'

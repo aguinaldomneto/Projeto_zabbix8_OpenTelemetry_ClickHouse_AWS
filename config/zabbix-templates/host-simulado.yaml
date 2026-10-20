@@ -1,0 +1,27 @@
+zabbix_export:
+  version: '8.0'
+  template_groups:
+    - uuid: 5008fede2f8045fdbc73e49bbb967951
+      name: 'Templates/Lab Zabbix 8 + OpenTelemetry'
+  templates:
+    - uuid: 90a06a1689844f12916c9e964f5dc4f8
+      template: 'Host simulado - latencia'
+      name: 'Host simulado - latência (IA)'
+      groups:
+        - name: 'Templates/Lab Zabbix 8 + OpenTelemetry'
+      items:
+        - uuid: 519a6578dd2749a9be5a8841554e7ee7
+          name: 'Latência de rede até {$LATENCIA_ALVO}'
+          type: ZABBIX_ACTIVE
+          key: 'lab.latencia[{$LATENCIA_ALVO}]'
+          value_type: FLOAT
+          units: s
+          triggers:
+            - uuid: 6f67a5a9e98241f09669f3f92f861d90
+              expression: 'baselinedev(/Host simulado - latencia/lab.latencia[{$LATENCIA_ALVO}],1h:now/h,"d",7)>3'
+              name: 'Latência de rede fora do padrão'
+              priority: WARNING
+              description: 'Desvio de mais de 3 sigmas sobre a média da mesma hora nos últimos 7 dias.'
+      macros:
+        - macro: '{$LATENCIA_ALVO}'
+          value: zabbix-proxy

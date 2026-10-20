@@ -1,0 +1,994 @@
+zabbix_export:
+  version: '8.0'
+  template_groups:
+    - uuid: 5008fede2f8045fdbc73e49bbb967951
+      name: 'Templates/Lab Zabbix 8 + OpenTelemetry'
+  templates:
+    - uuid: 33a24d131b66490a80ead36293f3964c
+      template: 'OTel ClickHouse APM'
+      name: 'OTel APM via ClickHouse (Telemetry query)'
+      description: 'Observabilidade OpenTelemetry com itens nativos ''Telemetry query'' (type 24) do Zabbix 8.0 sobre as tabelas otel_* do ClickHouse: taxa de spans, erros, latência p50/p95/p99 por serviço (LLD), logs por severidade, métricas do gerador e frescor da ingestão. Vincule a um host monitorado pelo proxy com coleta APM (ex.: otel-apm-lab). Gerado pela API e exportado com configuration.export.'
+      groups:
+        - name: 'Templates/Lab Zabbix 8 + OpenTelemetry'
+      items:
+        - uuid: 52e5ed6392a847679dbac4f31e59430c
+          name: 'Ingestão: idade do último log'
+          type: CALCULATED
+          key: otel.logs.age
+          units: s
+          params: now()-last(//otel.logs.last_ts)
+          description: 'Segundos desde o último log gravado.'
+          tags:
+            - tag: component
+              value: ingestion
+            - tag: layer
+              value: apm
+        - uuid: 1865d89e8a834168a80ab48cc356a749
+          name: 'Logs: ERROR/FATAL por minuto'
+          type: TELEMETRY_QUERY
+          key: otel.logs.error
+          units: logs
+          description: 'COUNT() de logs com SeverityText ERROR ou FATAL por minuto.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '{"columns": {"n": 0}}'
+            - type: JSONPATH
+              parameters:
+                - $.columns.n
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            signal_type: LOGS
+            aggregated_columns:
+              - alias: 'n'
+            filter:
+              evaltype: OR
+              conditions:
+                - column: SeverityText
+                  value: ERROR
+                - column: SeverityText
+                  value: FATAL
+          tags:
+            - tag: component
+              value: logs
+            - tag: layer
+              value: apm
+        - uuid: d0e09158bfe344b8a71dbd5fe752ee66
+          name: 'Logs: ERROR/FATAL nos últimos 5m'
+          type: CALCULATED
+          key: otel.logs.error.5m
+          units: logs
+          params: 'sum(//otel.logs.error,5m)'
+          description: 'Soma dos logs ERROR/FATAL nos últimos 5 minutos.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '-1'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '0'
+          tags:
+            - tag: component
+              value: logs
+            - tag: layer
+              value: apm
+          triggers:
+            - uuid: 210a26674e1e40d3bf7218071247546c
+              expression: 'last(/OTel ClickHouse APM/otel.logs.error.5m)>{$OTEL.LOGS.ERROR.MAX}'
+              recovery_mode: RECOVERY_EXPRESSION
+              recovery_expression: 'last(/OTel ClickHouse APM/otel.logs.error.5m)<{$OTEL.LOGS.ERROR.RECOVERY}'
+              name: 'Pico de logs ERROR/FATAL (>{$OTEL.LOGS.ERROR.MAX} em 5m)'
+              opdata: '{ITEM.LASTVALUE1} logs'
+              priority: WARNING
+              description: 'Volume de logs de erro acima do normal.'
+              tags:
+                - tag: layer
+                  value: apm
+                - tag: scope
+                  value: logs
+                - tag: service
+                  value: all
+        - uuid: 02c3d7b6ab2d4002af46aa1dab08a61a
+          name: 'Logs: horário do último log'
+          type: TELEMETRY_QUERY
+          key: otel.logs.last_ts
+          units: unixtime
+          description: 'MAX(Timestamp) de otel_logs.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+            - type: JSONPATH
+              parameters:
+                - $.columns.ultimo
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            signal_type: LOGS
+            aggregated_columns:
+              - function: MAX
+                column: Timestamp
+                alias: ultimo
+            filter:
+              evaltype: AND
+          tags:
+            - tag: component
+              value: ingestion
+            - tag: layer
+              value: apm
+        - uuid: 5a241118c6854e9e95ddbfb83bac94b5
+          name: 'Logs: registros por minuto'
+          type: TELEMETRY_QUERY
+          key: otel.logs.rate
+          units: logs
+          description: 'COUNT() de otel_logs por minuto.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '{"columns": {"n": 0}}'
+            - type: JSONPATH
+              parameters:
+                - $.columns.n
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            signal_type: LOGS
+            aggregated_columns:
+              - alias: 'n'
+            filter:
+              evaltype: AND
+          tags:
+            - tag: component
+              value: logs
+            - tag: layer
+              value: apm
+        - uuid: 4052324a43974261bd7d2e4fd8f1f2d8
+          name: 'Logs: WARN por minuto'
+          type: TELEMETRY_QUERY
+          key: otel.logs.warn
+          units: logs
+          description: 'COUNT() de logs com SeverityText WARN ou WARNING por minuto.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '{"columns": {"n": 0}}'
+            - type: JSONPATH
+              parameters:
+                - $.columns.n
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            signal_type: LOGS
+            aggregated_columns:
+              - alias: 'n'
+            filter:
+              evaltype: OR
+              conditions:
+                - column: SeverityText
+                  value: WARN
+                - column: SeverityText
+                  value: WARNING
+          tags:
+            - tag: component
+              value: logs
+            - tag: layer
+              value: apm
+        - uuid: f057511e19f24eb2bb1e3e9d4b054573
+          name: 'Métrica demo.fila.tamanho: média'
+          type: TELEMETRY_QUERY
+          key: 'otel.metric.gauge.avg[demo.fila.tamanho]'
+          value_type: FLOAT
+          description: 'AVG(Value) da métrica gauge do gerador por minuto. Nome literal: macros não são expandidas dentro do query neste trunk.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+            - type: JSONPATH
+              parameters:
+                - $.columns.v
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            signal_type: METRICS
+            metric_point_type: GAUGE
+            aggregated_columns:
+              - function: AVG
+                column: Value
+                alias: v
+            filter:
+              evaltype: AND
+              conditions:
+                - column: MetricName
+                  value: demo.fila.tamanho
+          tags:
+            - tag: component
+              value: metrics
+            - tag: layer
+              value: apm
+        - uuid: b50e8ba5f88248108e5cd34a613b7887
+          name: 'Métrica demo.fila.tamanho: máximo'
+          type: TELEMETRY_QUERY
+          key: 'otel.metric.gauge.max[demo.fila.tamanho]'
+          value_type: FLOAT
+          description: 'MAX(Value) da métrica gauge do gerador por minuto.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+            - type: JSONPATH
+              parameters:
+                - $.columns.v
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            signal_type: METRICS
+            metric_point_type: GAUGE
+            aggregated_columns:
+              - function: MAX
+                column: Value
+                alias: v
+            filter:
+              evaltype: AND
+              conditions:
+                - column: MetricName
+                  value: demo.fila.tamanho
+          tags:
+            - tag: component
+              value: metrics
+            - tag: layer
+              value: apm
+        - uuid: 0583d5972ae84d68b9ca4cc3984d2653
+          name: 'Métrica demo.coleta.duracao: média acumulada'
+          type: TELEMETRY_QUERY
+          key: 'otel.metric.histogram.avg[demo.coleta.duracao]'
+          value_type: FLOAT
+          units: s
+          description: 'SUM(Sum)/SUM(Count) do histograma. Com temporalidade CUMULATIVA (padrão do SDK Python) é a média desde o início do processo, não da janela.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var c = JSON.parse(value).columns;
+                  return c.n > 0 ? c.s / c.n : 0;
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            signal_type: METRICS
+            metric_point_type: HISTOGRAM
+            aggregated_columns:
+              - function: SUM
+                column: Sum
+                alias: s
+              - function: SUM
+                column: Count
+                alias: 'n'
+            filter:
+              evaltype: AND
+              conditions:
+                - column: MetricName
+                  value: demo.coleta.duracao
+          tags:
+            - tag: component
+              value: metrics
+            - tag: layer
+              value: apm
+        - uuid: ab4cf23b37e640dab6f67d55d10c0a2c
+          name: 'Ingestão: idade da última métrica'
+          type: CALCULATED
+          key: otel.metrics.age
+          units: s
+          params: now()-last(//otel.metrics.last_ts)
+          description: 'Segundos desde o último ponto de métrica sum gravado.'
+          tags:
+            - tag: component
+              value: ingestion
+            - tag: layer
+              value: apm
+        - uuid: edcfca1d3e5143029457e5dc1106a1d1
+          name: 'Métricas: horário do último ponto (sum)'
+          type: TELEMETRY_QUERY
+          key: otel.metrics.last_ts
+          units: unixtime
+          description: 'MAX(TimeUnix) de otel_metrics_sum (contadores; quase toda aplicação exporta ao menos um).'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+            - type: JSONPATH
+              parameters:
+                - $.columns.ultimo
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            signal_type: METRICS
+            aggregated_columns:
+              - function: MAX
+                column: TimeUnix
+                alias: ultimo
+            filter:
+              evaltype: AND
+          tags:
+            - tag: component
+              value: ingestion
+            - tag: layer
+              value: apm
+        - uuid: 9c90bb92d17d42dfa6ab85bbec1b5b64
+          name: 'Serviços OTel: contagem por serviço (bruto, descoberta)'
+          type: TELEMETRY_QUERY
+          key: otel.services.raw
+          delay: '{$OTEL.LLD.INTERVAL}'
+          history: 1d
+          value_type: TEXT
+          description: 'Uma linha JSON por ServiceName (GROUP BY ServiceName). Alimenta a LLD de serviços.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: '{$OTEL.LLD.INTERVAL}'
+          query:
+            columns:
+              - column: ServiceName
+            aggregated_columns:
+              - alias: spans
+            filter:
+              evaltype: AND
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+        - uuid: b95aa6322444487d907d3919f11771bb
+          name: 'Traces: latência p95 (spans Server)'
+          type: TELEMETRY_QUERY
+          key: otel.span.duration.p95
+          value_type: FLOAT
+          units: s
+          description: 'Percentil 95 de Duration (ns -> s) dos spans SpanKind=Server, todos os serviços.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+            - type: JSONPATH
+              parameters:
+                - $.columns.p95
+            - type: MULTIPLIER
+              parameters:
+                - '1.0E-9'
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            aggregated_columns:
+              - function: PERCENTILE
+                column: Duration
+                parameters:
+                  - '95'
+                alias: p95
+            filter:
+              evaltype: AND
+              conditions:
+                - column: SpanKind
+                  value: Server
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+          triggers:
+            - uuid: 414f2724e62e48ef9a159e74e030081b
+              expression: 'min(/OTel ClickHouse APM/otel.span.duration.p95,5m)>{$OTEL.LATENCY.P95.WARN}'
+              recovery_mode: RECOVERY_EXPRESSION
+              recovery_expression: 'max(/OTel ClickHouse APM/otel.span.duration.p95,5m)<{$OTEL.LATENCY.P95.RECOVERY}'
+              name: 'Latência p95 de spans Server alta (>{$OTEL.LATENCY.P95.WARN}s)'
+              opdata: 'p95: {ITEM.LASTVALUE1}'
+              priority: WARNING
+              description: 'p95 acima do limite em todas as coletas dos últimos 5 minutos.'
+              tags:
+                - tag: layer
+                  value: apm
+                - tag: scope
+                  value: performance
+                - tag: service
+                  value: all
+        - uuid: 8f334e9eef944b6ba80a2d34ff1e4479
+          name: 'Traces: taxa de erro (5m)'
+          type: CALCULATED
+          key: otel.spans.error.pct
+          value_type: FLOAT
+          units: '%'
+          params: '100*sum(//otel.spans.errors,5m)/sum(//otel.spans.rate,5m)'
+          description: 'Spans com erro / total de spans nos últimos 5 minutos. Sem spans, vale 0.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '-1'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '0'
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+          triggers:
+            - uuid: 999fdd2480c84a02862f6b68e0fce6b2
+              expression: 'min(/OTel ClickHouse APM/otel.spans.error.pct,3m)>{$OTEL.ERROR.PCT.WARN}'
+              recovery_mode: RECOVERY_EXPRESSION
+              recovery_expression: 'max(/OTel ClickHouse APM/otel.spans.error.pct,3m)<{$OTEL.ERROR.PCT.RECOVERY}'
+              name: 'Taxa de erro de spans alta (>{$OTEL.ERROR.PCT.WARN}%)'
+              opdata: 'Erro: {ITEM.LASTVALUE1}'
+              priority: AVERAGE
+              description: 'Taxa de erro sustentada por 3 minutos. Fecha só abaixo de {$OTEL.ERROR.PCT.RECOVERY}% (histerese).'
+              dependencies:
+                - name: 'Taxa de erro de spans muito alta (>{$OTEL.ERROR.PCT.HIGH}%)'
+                  expression: 'min(/OTel ClickHouse APM/otel.spans.error.pct,3m)>{$OTEL.ERROR.PCT.HIGH}'
+                  recovery_expression: 'max(/OTel ClickHouse APM/otel.spans.error.pct,3m)<{$OTEL.ERROR.PCT.RECOVERY}'
+              tags:
+                - tag: layer
+                  value: apm
+                - tag: scope
+                  value: errors
+                - tag: service
+                  value: all
+            - uuid: d58110ca774d40deb45b2dd399027523
+              expression: 'min(/OTel ClickHouse APM/otel.spans.error.pct,3m)>{$OTEL.ERROR.PCT.HIGH}'
+              recovery_mode: RECOVERY_EXPRESSION
+              recovery_expression: 'max(/OTel ClickHouse APM/otel.spans.error.pct,3m)<{$OTEL.ERROR.PCT.RECOVERY}'
+              name: 'Taxa de erro de spans muito alta (>{$OTEL.ERROR.PCT.HIGH}%)'
+              opdata: 'Erro: {ITEM.LASTVALUE1}'
+              priority: HIGH
+              description: 'Taxa de erro sustentada por 3 minutos. Fecha só abaixo de {$OTEL.ERROR.PCT.RECOVERY}% (histerese).'
+              tags:
+                - tag: layer
+                  value: apm
+                - tag: scope
+                  value: errors
+                - tag: service
+                  value: all
+        - uuid: b75a2721a51646958b56629cadd97f11
+          name: 'Traces: spans com erro por minuto'
+          type: TELEMETRY_QUERY
+          key: otel.spans.errors
+          units: spans
+          description: 'COUNT() de spans com StatusCode = Error por minuto. Bucket vazio vira 0.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '{"columns": {"erros": 0}}'
+            - type: JSONPATH
+              parameters:
+                - $.columns.erros
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            aggregated_columns:
+              - alias: erros
+            filter:
+              evaltype: AND
+              conditions:
+                - column: StatusCode
+                  value: Error
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+        - uuid: fa7dda8c62fa4718988e812dcd621f67
+          name: 'Traces: spans por minuto'
+          type: TELEMETRY_QUERY
+          key: otel.spans.rate
+          units: spans
+          description: 'COUNT() de otel_traces por bucket de 1 minuto (todos os serviços).'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '{"columns": {"spans": 0}}'
+            - type: JSONPATH
+              parameters:
+                - $.columns.spans
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            aggregated_columns:
+              - alias: spans
+            filter:
+              evaltype: AND
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+        - uuid: 039ae47489f04318ad1fa528716d9cf5
+          name: 'Serviços OTel: latência p50/p95/p99 por serviço (bruto)'
+          type: TELEMETRY_QUERY
+          key: otel.svc.latency.raw
+          history: 1d
+          value_type: TEXT
+          description: 'Percentis de Duration dos spans SpanKind=Server, GROUP BY ServiceName, por minuto.'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            columns:
+              - column: ServiceName
+            aggregated_columns:
+              - function: PERCENTILE
+                column: Duration
+                parameters:
+                  - '50'
+                alias: p50
+              - function: PERCENTILE
+                column: Duration
+                parameters:
+                  - '95'
+                alias: p95
+              - function: PERCENTILE
+                column: Duration
+                parameters:
+                  - '99'
+                alias: p99
+            filter:
+              evaltype: AND
+              conditions:
+                - column: SpanKind
+                  value: Server
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+        - uuid: 5cad396dc1dd405189644968340a4d20
+          name: 'Serviços OTel: spans por serviço e status (bruto)'
+          type: TELEMETRY_QUERY
+          key: otel.svc.status.raw
+          history: 1d
+          value_type: TEXT
+          description: 'GROUP BY ServiceName, StatusCode por minuto: uma linha JSON por par. Mestre dos itens por serviço (macros LLD não são substituídas dentro do query neste trunk, então o filtro por serviço é feito no pré-processamento).'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            columns:
+              - column: ServiceName
+              - column: StatusCode
+            aggregated_columns:
+              - alias: spans
+            filter:
+              evaltype: AND
+          tags:
+            - tag: component
+              value: traces
+            - tag: layer
+              value: apm
+        - uuid: 962bd627a4534c65984ba8b89a266d21
+          name: 'Ingestão: idade do último span'
+          type: CALCULATED
+          key: otel.traces.age
+          units: s
+          params: now()-last(//otel.traces.last_ts)
+          description: 'Segundos desde o último span gravado no ClickHouse (inclui o time shift).'
+          tags:
+            - tag: component
+              value: ingestion
+            - tag: layer
+              value: apm
+        - uuid: cee9da1380a74ca7a54ec8094bc96b1e
+          name: 'Traces: horário do último span'
+          type: TELEMETRY_QUERY
+          key: otel.traces.last_ts
+          units: unixtime
+          description: 'MAX(Timestamp) de otel_traces. Sem spans no bucket, nenhum valor é gravado (nodata detecta).'
+          preprocessing:
+            - type: CHECK_NOT_SUPPORTED
+              parameters:
+                - '0'
+                - '^No value$'
+            - type: JSONPATH
+              parameters:
+                - $.columns.ultimo
+          time_shift: '{$OTEL.TIME_SHIFT}'
+          lookback_limit: '{$OTEL.LOOKBACK}'
+          granularity: 1m
+          query:
+            aggregated_columns:
+              - function: MAX
+                column: Timestamp
+                alias: ultimo
+            filter:
+              evaltype: AND
+          tags:
+            - tag: component
+              value: ingestion
+            - tag: layer
+              value: apm
+      discovery_rules:
+        - uuid: 6f4024fe53bc4909b699a0b2102350dc
+          name: 'Descoberta de serviços OTel (ServiceName)'
+          type: DEPENDENT
+          key: otel.services.discovery
+          filter:
+            evaltype: AND
+            conditions:
+              - macro: '{#SERVICE}'
+                value: '{$OTEL.LLD.SERVICE.MATCHES}'
+              - macro: '{#SERVICE}'
+                value: '{$OTEL.LLD.SERVICE.NOT_MATCHES}'
+                operator: NOT_MATCHES_REGEX
+          lifetime_type: DELETE_NEVER
+          enabled_lifetime_type: DISABLE_NEVER
+          description: 'LLD dependente: cada linha do item bruto vira {#SERVICE}. Recursos não são apagados/desabilitados quando um serviço some de uma janela (cada linha chega como valor separado).'
+          item_prototypes:
+            - uuid: 6303e2cfe1974ac5ad067e5f93afeef4
+              name: 'Serviço {#SERVICE}: taxa de erro (5m)'
+              type: CALCULATED
+              key: 'otel.svc.error.pct["{#SERVICE}"]'
+              value_type: FLOAT
+              units: '%'
+              params: '100*sum(//otel.svc.spans.err["{#SERVICE}"],5m)/sum(//otel.svc.spans.row["{#SERVICE}"],5m)'
+              description: 'Spans com StatusCode=Error / total do serviço nos últimos 5 minutos.'
+              preprocessing:
+                - type: CHECK_NOT_SUPPORTED
+                  parameters:
+                    - '-1'
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              tags:
+                - tag: component
+                  value: traces
+                - tag: layer
+                  value: apm
+                - tag: service
+                  value: '{#SERVICE}'
+              trigger_prototypes:
+                - uuid: bcb7adc61ef1427385ee2caddb4f3cac
+                  expression: 'min(/OTel ClickHouse APM/otel.svc.error.pct["{#SERVICE}"],3m)>{$OTEL.ERROR.PCT.WARN:"{#SERVICE}"}'
+                  recovery_mode: RECOVERY_EXPRESSION
+                  recovery_expression: 'max(/OTel ClickHouse APM/otel.svc.error.pct["{#SERVICE}"],3m)<{$OTEL.ERROR.PCT.RECOVERY:"{#SERVICE}"}'
+                  name: 'Serviço {#SERVICE}: taxa de erro alta (>{$OTEL.ERROR.PCT.WARN:"{#SERVICE}"}%)'
+                  opdata: 'Erro: {ITEM.LASTVALUE1}'
+                  priority: AVERAGE
+                  description: 'Limiar ajustável por serviço com macro de contexto.'
+                  tags:
+                    - tag: layer
+                      value: apm
+                    - tag: scope
+                      value: errors
+                    - tag: service
+                      value: '{#SERVICE}'
+            - uuid: e9c5b41e72ee47c891c59280299e60f0
+              name: 'Serviço {#SERVICE}: latência p50'
+              type: DEPENDENT
+              key: 'otel.svc.latency.p50["{#SERVICE}"]'
+              value_type: FLOAT
+              units: s
+              description: 'Percentil 50 de Duration dos spans Server do serviço (ns -> s).'
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var c = JSON.parse(value).columns;
+                      c.erros = (c.StatusCode === 'Error') ? c.spans : 0;
+                      return JSON.stringify([c]);
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.ServiceName == "{#SERVICE}")].p50.first()'
+                  error_handler: DISCARD_VALUE
+                - type: MULTIPLIER
+                  parameters:
+                    - '1.0E-9'
+              master_item:
+                key: otel.svc.latency.raw
+              tags:
+                - tag: component
+                  value: traces
+                - tag: layer
+                  value: apm
+                - tag: service
+                  value: '{#SERVICE}'
+            - uuid: ee090cc864144640a0d1bc86c6017428
+              name: 'Serviço {#SERVICE}: latência p95'
+              type: DEPENDENT
+              key: 'otel.svc.latency.p95["{#SERVICE}"]'
+              value_type: FLOAT
+              units: s
+              description: 'Percentil 95 de Duration dos spans Server do serviço (ns -> s).'
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var c = JSON.parse(value).columns;
+                      c.erros = (c.StatusCode === 'Error') ? c.spans : 0;
+                      return JSON.stringify([c]);
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.ServiceName == "{#SERVICE}")].p95.first()'
+                  error_handler: DISCARD_VALUE
+                - type: MULTIPLIER
+                  parameters:
+                    - '1.0E-9'
+              master_item:
+                key: otel.svc.latency.raw
+              tags:
+                - tag: component
+                  value: traces
+                - tag: layer
+                  value: apm
+                - tag: service
+                  value: '{#SERVICE}'
+              trigger_prototypes:
+                - uuid: eb537489723d4690bb430034b3a86433
+                  expression: 'min(/OTel ClickHouse APM/otel.svc.latency.p95["{#SERVICE}"],5m)>{$OTEL.LATENCY.P95.WARN:"{#SERVICE}"}'
+                  recovery_mode: RECOVERY_EXPRESSION
+                  recovery_expression: 'max(/OTel ClickHouse APM/otel.svc.latency.p95["{#SERVICE}"],5m)<{$OTEL.LATENCY.P95.RECOVERY:"{#SERVICE}"}'
+                  name: 'Serviço {#SERVICE}: latência p95 alta (>{$OTEL.LATENCY.P95.WARN:"{#SERVICE}"}s)'
+                  opdata: 'p95: {ITEM.LASTVALUE1}'
+                  priority: WARNING
+                  description: 'p95 dos spans Server do serviço acima do limite em todas as coletas de 5 minutos.'
+                  tags:
+                    - tag: layer
+                      value: apm
+                    - tag: scope
+                      value: performance
+                    - tag: service
+                      value: '{#SERVICE}'
+            - uuid: 2cb952fd22e14c9588205e87276dc241
+              name: 'Serviço {#SERVICE}: latência p99'
+              type: DEPENDENT
+              key: 'otel.svc.latency.p99["{#SERVICE}"]'
+              value_type: FLOAT
+              units: s
+              description: 'Percentil 99 de Duration dos spans Server do serviço (ns -> s).'
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var c = JSON.parse(value).columns;
+                      c.erros = (c.StatusCode === 'Error') ? c.spans : 0;
+                      return JSON.stringify([c]);
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.ServiceName == "{#SERVICE}")].p99.first()'
+                  error_handler: DISCARD_VALUE
+                - type: MULTIPLIER
+                  parameters:
+                    - '1.0E-9'
+              master_item:
+                key: otel.svc.latency.raw
+              tags:
+                - tag: component
+                  value: traces
+                - tag: layer
+                  value: apm
+                - tag: service
+                  value: '{#SERVICE}'
+            - uuid: 0795b87655fc4d149f692997b0adb4da
+              name: 'Serviço {#SERVICE}: spans com erro (linha por status)'
+              type: DEPENDENT
+              key: 'otel.svc.spans.err["{#SERVICE}"]'
+              history: 7d
+              units: spans
+              description: 'Erros por linha de status (0 nas linhas Unset/Ok), o que garante zeros na soma.'
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var c = JSON.parse(value).columns;
+                      c.erros = (c.StatusCode === 'Error') ? c.spans : 0;
+                      return JSON.stringify([c]);
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.ServiceName == "{#SERVICE}")].erros.first()'
+                  error_handler: DISCARD_VALUE
+              master_item:
+                key: otel.svc.status.raw
+              tags:
+                - tag: component
+                  value: traces
+                - tag: layer
+                  value: apm
+                - tag: service
+                  value: '{#SERVICE}'
+            - uuid: 2070c9d641c446bbaac414031410ae3b
+              name: 'Serviço {#SERVICE}: spans por minuto (média 5m)'
+              type: CALCULATED
+              key: 'otel.svc.spans.rate["{#SERVICE}"]'
+              value_type: FLOAT
+              units: spans
+              params: 'sum(//otel.svc.spans.row["{#SERVICE}"],5m)/5'
+              description: 'Total de spans do serviço nos últimos 5 minutos / 5.'
+              preprocessing:
+                - type: CHECK_NOT_SUPPORTED
+                  parameters:
+                    - '-1'
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              tags:
+                - tag: component
+                  value: traces
+                - tag: layer
+                  value: apm
+                - tag: service
+                  value: '{#SERVICE}'
+            - uuid: e8e69f309a5246da92bbd91e85ad99dd
+              name: 'Serviço {#SERVICE}: spans (linha por status)'
+              type: DEPENDENT
+              key: 'otel.svc.spans.row["{#SERVICE}"]'
+              history: 7d
+              units: spans
+              description: 'Contagem por (serviço, status) a cada minuto; base dos cálculos abaixo.'
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var c = JSON.parse(value).columns;
+                      c.erros = (c.StatusCode === 'Error') ? c.spans : 0;
+                      return JSON.stringify([c]);
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.ServiceName == "{#SERVICE}")].spans.first()'
+                  error_handler: DISCARD_VALUE
+              master_item:
+                key: otel.svc.status.raw
+              tags:
+                - tag: component
+                  value: traces
+                - tag: layer
+                  value: apm
+                - tag: service
+                  value: '{#SERVICE}'
+          master_item:
+            key: otel.services.raw
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var r = JSON.parse(value);
+                  return JSON.stringify([{"{#SERVICE}": r.columns.ServiceName}]);
+      tags:
+        - tag: class
+          value: application
+        - tag: target
+          value: opentelemetry
+      macros:
+        - macro: '{$OTEL.ERROR.PCT.HIGH}'
+          value: '30'
+          description: 'Taxa de erro de spans (%) que abre problema High.'
+        - macro: '{$OTEL.ERROR.PCT.RECOVERY}'
+          value: '10'
+          description: 'Taxa de erro (%) abaixo da qual o problema fecha (histerese).'
+        - macro: '{$OTEL.ERROR.PCT.WARN}'
+          value: '15'
+          description: 'Taxa de erro de spans (%) que abre problema (Average). Aceita contexto por serviço: {$OTEL.ERROR.PCT.WARN:"svc"}.'
+        - macro: '{$OTEL.INGEST.MAX_AGE}'
+          value: 5m
+          description: 'Idade máxima do último span/log/métrica antes de considerar a ingestão parada.'
+        - macro: '{$OTEL.LATENCY.P95.RECOVERY}'
+          value: '2'
+          description: 'Latência p95 (s) abaixo da qual o problema fecha.'
+        - macro: '{$OTEL.LATENCY.P95.WARN}'
+          value: '3'
+          description: 'Latência p95 (s) de spans Server que abre problema. Aceita contexto por serviço.'
+        - macro: '{$OTEL.LLD.INTERVAL}'
+          value: 5m
+          description: 'Intervalo da descoberta de serviços (SELECT DISTINCT ServiceName equivalente).'
+        - macro: '{$OTEL.LLD.SERVICE.MATCHES}'
+          value: '.*'
+          description: 'Regex de serviços a descobrir.'
+        - macro: '{$OTEL.LLD.SERVICE.NOT_MATCHES}'
+          value: CHANGE_IF_NEEDED
+          description: 'Regex de serviços a ignorar.'
+        - macro: '{$OTEL.LOGS.ERROR.MAX}'
+          value: '60'
+          description: 'Logs ERROR/FATAL em 5 minutos que abrem problema.'
+        - macro: '{$OTEL.LOGS.ERROR.RECOVERY}'
+          value: '40'
+          description: 'Logs ERROR/FATAL em 5 minutos abaixo dos quais o problema fecha.'
+        - macro: '{$OTEL.LOOKBACK}'
+          value: 10m
+          description: 'Limite de retrocesso quando a última coleta falhou ou é antiga.'
+        - macro: '{$OTEL.NODATA.WINDOW}'
+          value: 10m
+          description: 'Janela do nodata() dos itens de timestamp.'
+        - macro: '{$OTEL.TIME_SHIFT}'
+          value: 30s
+          description: 'Atraso da janela de processamento (dá tempo ao proxy de gravar no ClickHouse).'
+  triggers:
+    - uuid: d10a86c5d7184fe398450fc1a69e0710
+      expression: 'nodata(/OTel ClickHouse APM/otel.logs.last_ts,{$OTEL.NODATA.WINDOW})=1 or last(/OTel ClickHouse APM/otel.logs.age)>{$OTEL.INGEST.MAX_AGE}'
+      recovery_mode: RECOVERY_EXPRESSION
+      recovery_expression: 'nodata(/OTel ClickHouse APM/otel.logs.last_ts,{$OTEL.NODATA.WINDOW})=0 and last(/OTel ClickHouse APM/otel.logs.age)<{$OTEL.INGEST.MAX_AGE}'
+      name: 'Ingestão OTel de logs parada'
+      opdata: 'Idade: {ITEM.LASTVALUE2}'
+      priority: AVERAGE
+      description: 'Nenhum log recente em otel_logs.'
+      dependencies:
+        - name: 'Ingestão OTel parada: nenhum span novo no ClickHouse'
+          expression: 'nodata(/OTel ClickHouse APM/otel.traces.last_ts,{$OTEL.NODATA.WINDOW})=1 or last(/OTel ClickHouse APM/otel.traces.age)>{$OTEL.INGEST.MAX_AGE}'
+          recovery_expression: 'nodata(/OTel ClickHouse APM/otel.traces.last_ts,{$OTEL.NODATA.WINDOW})=0 and last(/OTel ClickHouse APM/otel.traces.age)<{$OTEL.INGEST.MAX_AGE}'
+      tags:
+        - tag: layer
+          value: apm
+        - tag: scope
+          value: availability
+        - tag: service
+          value: all
+    - uuid: 1112f24cc8fd4973a67638009d405883
+      expression: 'nodata(/OTel ClickHouse APM/otel.metrics.last_ts,{$OTEL.NODATA.WINDOW})=1 or last(/OTel ClickHouse APM/otel.metrics.age)>{$OTEL.INGEST.MAX_AGE}'
+      recovery_mode: RECOVERY_EXPRESSION
+      recovery_expression: 'nodata(/OTel ClickHouse APM/otel.metrics.last_ts,{$OTEL.NODATA.WINDOW})=0 and last(/OTel ClickHouse APM/otel.metrics.age)<{$OTEL.INGEST.MAX_AGE}'
+      name: 'Ingestão OTel de métricas parada'
+      opdata: 'Idade: {ITEM.LASTVALUE2}'
+      priority: AVERAGE
+      description: 'Nenhum ponto recente em otel_metrics_sum.'
+      dependencies:
+        - name: 'Ingestão OTel parada: nenhum span novo no ClickHouse'
+          expression: 'nodata(/OTel ClickHouse APM/otel.traces.last_ts,{$OTEL.NODATA.WINDOW})=1 or last(/OTel ClickHouse APM/otel.traces.age)>{$OTEL.INGEST.MAX_AGE}'
+          recovery_expression: 'nodata(/OTel ClickHouse APM/otel.traces.last_ts,{$OTEL.NODATA.WINDOW})=0 and last(/OTel ClickHouse APM/otel.traces.age)<{$OTEL.INGEST.MAX_AGE}'
+      tags:
+        - tag: layer
+          value: apm
+        - tag: scope
+          value: availability
+        - tag: service
+          value: all
+    - uuid: f7d3b22d54c14b7f921ce63e2c8a9209
+      expression: 'nodata(/OTel ClickHouse APM/otel.traces.last_ts,{$OTEL.NODATA.WINDOW})=1 or last(/OTel ClickHouse APM/otel.traces.age)>{$OTEL.INGEST.MAX_AGE}'
+      recovery_mode: RECOVERY_EXPRESSION
+      recovery_expression: 'nodata(/OTel ClickHouse APM/otel.traces.last_ts,{$OTEL.NODATA.WINDOW})=0 and last(/OTel ClickHouse APM/otel.traces.age)<{$OTEL.INGEST.MAX_AGE}'
+      name: 'Ingestão OTel parada: nenhum span novo no ClickHouse'
+      opdata: 'Idade: {ITEM.LASTVALUE2}'
+      priority: HIGH
+      description: 'Nenhum span recente em otel_traces. Verifique o gerador/aplicações, o coletor APM do proxy (4317) e a gravação no ClickHouse.'
+      tags:
+        - tag: layer
+          value: apm
+        - tag: scope
+          value: availability
+        - tag: service
+          value: all

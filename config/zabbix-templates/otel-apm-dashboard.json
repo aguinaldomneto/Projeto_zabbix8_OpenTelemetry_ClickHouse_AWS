@@ -1,0 +1,62 @@
+{
+  "_comentario": "Dashboard global 'OTel APM (ClickHouse)'. Importado por ferramentas/importar_otel_apm.py (dashboard.create/update pelo nome). Valores '@item:<host>:<chave>' são trocados pelo itemid real na importação. Widgets nativos (não há widget APM próprio no 8.0 trunk; as telas APM ficam no menu APM).",
+  "name": "OTel APM (ClickHouse)",
+  "display_period": 60,
+  "auto_start": 1,
+  "pages": [
+    {
+      "name": "Visão geral",
+      "widgets": [
+        {"type": "item", "name": "Idade do último span", "x": 0, "y": 0, "width": 12, "height": 3, "fields": [
+          {"type": "4", "name": "itemid.0", "value": "@item:otel-apm-lab:otel.traces.age"},
+          {"type": "1", "name": "thresholds.0.color", "value": "4CAF50"}, {"type": "1", "name": "thresholds.0.threshold", "value": "0"},
+          {"type": "1", "name": "thresholds.1.color", "value": "E53935"}, {"type": "1", "name": "thresholds.1.threshold", "value": "300"}]},
+        {"type": "item", "name": "Idade do último log", "x": 12, "y": 0, "width": 12, "height": 3, "fields": [
+          {"type": "4", "name": "itemid.0", "value": "@item:otel-apm-lab:otel.logs.age"},
+          {"type": "1", "name": "thresholds.0.color", "value": "4CAF50"}, {"type": "1", "name": "thresholds.0.threshold", "value": "0"},
+          {"type": "1", "name": "thresholds.1.color", "value": "E53935"}, {"type": "1", "name": "thresholds.1.threshold", "value": "300"}]},
+        {"type": "item", "name": "Idade da última métrica", "x": 24, "y": 0, "width": 12, "height": 3, "fields": [
+          {"type": "4", "name": "itemid.0", "value": "@item:otel-apm-lab:otel.metrics.age"},
+          {"type": "1", "name": "thresholds.0.color", "value": "4CAF50"}, {"type": "1", "name": "thresholds.0.threshold", "value": "0"},
+          {"type": "1", "name": "thresholds.1.color", "value": "E53935"}, {"type": "1", "name": "thresholds.1.threshold", "value": "300"}]},
+        {"type": "item", "name": "Spans por minuto", "x": 36, "y": 0, "width": 12, "height": 3, "fields": [
+          {"type": "4", "name": "itemid.0", "value": "@item:otel-apm-lab:otel.spans.rate"}]},
+        {"type": "item", "name": "Taxa de erro (5m)", "x": 48, "y": 0, "width": 12, "height": 3, "fields": [
+          {"type": "4", "name": "itemid.0", "value": "@item:otel-apm-lab:otel.spans.error.pct"},
+          {"type": "1", "name": "thresholds.0.color", "value": "4CAF50"}, {"type": "1", "name": "thresholds.0.threshold", "value": "0"},
+          {"type": "1", "name": "thresholds.1.color", "value": "FFC107"}, {"type": "1", "name": "thresholds.1.threshold", "value": "15"},
+          {"type": "1", "name": "thresholds.2.color", "value": "E53935"}, {"type": "1", "name": "thresholds.2.threshold", "value": "30"}]},
+        {"type": "item", "name": "Latência p95 (Server)", "x": 60, "y": 0, "width": 12, "height": 3, "fields": [
+          {"type": "4", "name": "itemid.0", "value": "@item:otel-apm-lab:otel.span.duration.p95"}]},
+        {"type": "svggraph", "name": "Spans por minuto e spans com erro", "x": 0, "y": 3, "width": 36, "height": 5, "fields": [
+          {"type": "1", "name": "ds.0.hosts.0", "value": "otel-apm-lab"}, {"type": "1", "name": "ds.0.items.0", "value": "Traces: spans por minuto"},
+          {"type": "1", "name": "ds.0.color", "value": "42A5F5"}, {"type": "0", "name": "ds.0.width", "value": "2"},
+          {"type": "1", "name": "ds.1.hosts.0", "value": "otel-apm-lab"}, {"type": "1", "name": "ds.1.items.0", "value": "Traces: spans com erro por minuto"},
+          {"type": "1", "name": "ds.1.color", "value": "E53935"}, {"type": "0", "name": "ds.1.width", "value": "2"},
+          {"type": "1", "name": "lefty_min", "value": "0"}, {"type": "0", "name": "show_problems", "value": "1"}]},
+        {"type": "svggraph", "name": "Taxa de erro (%) global e por serviço", "x": 36, "y": 3, "width": 36, "height": 5, "fields": [
+          {"type": "1", "name": "ds.0.hosts.0", "value": "otel-apm-lab"}, {"type": "1", "name": "ds.0.items.0", "value": "Traces: taxa de erro (5m)"},
+          {"type": "1", "name": "ds.0.items.1", "value": "Serviço *: taxa de erro (5m)"},
+          {"type": "1", "name": "ds.0.color", "value": "FF7043"}, {"type": "0", "name": "ds.0.width", "value": "2"},
+          {"type": "1", "name": "lefty_min", "value": "0"}]},
+        {"type": "svggraph", "name": "Latência p95 por serviço (spans Server)", "x": 0, "y": 8, "width": 36, "height": 5, "fields": [
+          {"type": "1", "name": "ds.0.hosts.0", "value": "otel-apm-lab"}, {"type": "1", "name": "ds.0.items.0", "value": "Serviço *: latência p95"},
+          {"type": "1", "name": "ds.0.color", "value": "AB47BC"}, {"type": "0", "name": "ds.0.width", "value": "2"},
+          {"type": "1", "name": "ds.1.hosts.0", "value": "otel-apm-lab"}, {"type": "1", "name": "ds.1.items.0", "value": "Serviço *: latência p99"},
+          {"type": "1", "name": "ds.1.color", "value": "8D6E63"}, {"type": "0", "name": "ds.1.width", "value": "1"},
+          {"type": "1", "name": "lefty_min", "value": "0"}]},
+        {"type": "svggraph", "name": "Logs ERROR/FATAL e WARN por minuto", "x": 36, "y": 8, "width": 36, "height": 5, "fields": [
+          {"type": "1", "name": "ds.0.hosts.0", "value": "otel-apm-lab"}, {"type": "1", "name": "ds.0.items.0", "value": "Logs: ERROR/FATAL por minuto"},
+          {"type": "1", "name": "ds.0.color", "value": "E53935"}, {"type": "0", "name": "ds.0.width", "value": "2"},
+          {"type": "1", "name": "ds.1.hosts.0", "value": "otel-apm-lab"}, {"type": "1", "name": "ds.1.items.0", "value": "Logs: WARN por minuto"},
+          {"type": "1", "name": "ds.1.color", "value": "FFC107"}, {"type": "0", "name": "ds.1.width", "value": "2"},
+          {"type": "1", "name": "lefty_min", "value": "0"}]},
+        {"type": "problems", "name": "Problemas APM (tag layer=apm)", "x": 0, "y": 13, "width": 72, "height": 5, "fields": [
+          {"type": "0", "name": "evaltype", "value": "0"},
+          {"type": "1", "name": "tags.0.tag", "value": "layer"}, {"type": "0", "name": "tags.0.operator", "value": "1"},
+          {"type": "1", "name": "tags.0.value", "value": "apm"},
+          {"type": "0", "name": "show_tags", "value": "3"}, {"type": "0", "name": "show_lines", "value": "15"}]}
+      ]
+    }
+  ]
+}
