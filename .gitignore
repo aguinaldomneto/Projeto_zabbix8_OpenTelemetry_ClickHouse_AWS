@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.local.example
 *.pem
 *.key
 
@@ -15,3 +16,7 @@ diagnostico-*.txt
 # Python
 __pycache__/
 *.pyc
+.terraform/
+*.tfstate*
+*.tfvars
+.backup-p1/
