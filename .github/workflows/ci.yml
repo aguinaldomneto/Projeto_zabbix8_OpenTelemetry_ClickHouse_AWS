@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck nos scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck scripts/*.sh
+
+      - name: docker compose config
+        run: |
+          cp .env.example .env
+          docker compose config -q
+
+      - name: yamllint (opcional, não bloqueia)
+        continue-on-error: true
+        run: |
+          pip install --quiet yamllint
+          yamllint -d relaxed compose.yaml compose.local.yaml
+
+      - name: py_compile nos .py
+        run: |
+          find . -name '*.py' -not -path './.git/*' -print0 | xargs -0 python -m py_compile
