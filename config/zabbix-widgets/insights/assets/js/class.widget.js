@@ -27,10 +27,12 @@ class CWidgetInsights extends CWidget {
 				method: 'POST',
 				data: {
 					groupids: this.getFields().groupids || [],
-					pergunta: this.getFields().pergunta || ''
+					pergunta: this.getFields().pergunta || '',
+					[CSRF_TOKEN_NAME]: botao.dataset.csrf || ''
 				},
 				dataType: 'json',
 				success: (data) => {
+					// textContent: nunca interpreta HTML vindo do serviço/modelo.
 					resultado.textContent = data.erro ? data.erro : data.resposta;
 				},
 				error: () => {

@@ -6,7 +6,7 @@
 	"namespace": "Insights",
 	"version": "1.0",
 	"author": "Laboratório Zabbix 8 + OpenTelemetry",
-	"description": "Resume os problemas do painel com a API do Gemini (botão Analisar). Chave fica só no serviço ia-assistente, nunca no navegador.",
+	"description": "Resume os problemas do painel com a API do Gemini (botão Analisar) via serviço investigador (ou ia-assistente legado). Chave fica só no serviço, nunca no navegador; CSRF ativo.",
 	"widget": {
 		"js_class": "CWidgetInsights",
 		"size": {

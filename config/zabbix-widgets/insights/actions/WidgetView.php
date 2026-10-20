@@ -5,6 +5,7 @@ namespace Modules\Insights\Actions;
 use CButton,
 	CControllerDashboardWidgetView,
 	CControllerResponseData,
+	CCsrfTokenHelper,
 	CDiv,
 	CTableInfo,
 	CCol;
@@ -32,8 +33,10 @@ class WidgetView extends CControllerDashboardWidgetView {
 			$table->setNoDataMessage(_('Nenhum problema recente.'));
 		}
 
+		// Token CSRF da action widget.insights.analyze (proteção religada).
 		$botao = (new CButton(null, _('Analisar com IA')))
-			->addClass('js-insights-analyze');
+			->addClass('js-insights-analyze')
+			->setAttribute('data-csrf', CCsrfTokenHelper::get('widget.insights.analyze'));
 
 		$resultado = (new CDiv())->addClass('insights-resultado');
 
