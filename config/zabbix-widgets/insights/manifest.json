@@ -1,0 +1,30 @@
+{
+	"manifest_version": 2.0,
+	"id": "insights",
+	"type": "widget",
+	"name": "Insights (IA)",
+	"namespace": "Insights",
+	"version": "1.0",
+	"author": "Laboratório Zabbix 8 + OpenTelemetry",
+	"description": "Resume os problemas do painel com a API do Gemini (botão Analisar). Chave fica só no serviço ia-assistente, nunca no navegador.",
+	"widget": {
+		"js_class": "CWidgetInsights",
+		"size": {
+			"width": 12,
+			"height": 5
+		},
+		"refresh_rate": 0
+	},
+	"actions": {
+		"widget.insights.view": {
+			"class": "WidgetView"
+		},
+		"widget.insights.analyze": {
+			"class": "WidgetAnalyze",
+			"layout": "layout.json"
+		}
+	},
+	"assets": {
+		"js": ["class.widget.js"]
+	}
+}
