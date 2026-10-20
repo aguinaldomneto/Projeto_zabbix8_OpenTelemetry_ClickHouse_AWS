@@ -9,7 +9,8 @@
 #
 #   deploy       (padrão) copia o laboratório e sobe tudo na VM
 #   status       mostra a VM, o IP, a regra de SSH e se o acesso funciona
-#   liberar-ip   troca a regra de SSH do security group para o seu IP atual
+#   ip           mostra só o IP público da VM (sem formatação, para scripts)
+#   liberar-ip   libera as portas 22 (SSH), OTLP e do trapper para o seu IP atual
 #   ligar        liga a VM (o IP público muda)
 #   parar        para a VM, para não gastar crédito (os dados ficam no disco)
 #   ssh          abre um terminal na VM
@@ -53,6 +54,10 @@ SSH_USER=${SSH_USER:-ubuntu}
 SSH_KEY=${SSH_KEY:-}
 PORTA_LOCAL=${PORTA_LOCAL:-8080}
 DIR_REMOTO=zabbix8-telemetria-lab
+# Portas liberadas por "liberar-ip" além da 22: OTLP (APIs fictícias do WSL
+# local) e o trapper (os 10 hosts simulados do WSL local). Veja o README.
+OTLP_PORT=${OTLP_PORT:-4317}
+ZBX_TRAPPER_PORT=${ZBX_TRAPPER_PORT:-10051}
 
 VM_ID=""; VM_ESTADO=""; VM_TIPO=""; VM_SG=""
 
@@ -108,11 +113,14 @@ achar_vm() {
 
 meu_ip() { curl -fsS -m 10 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]'; }
 
-regras_ssh() { # CIDRs liberados na porta 22 do security group da VM
+regras_porta() { # regras_porta <porta> - CIDRs liberados nessa porta do SG da VM
+  local porta="$1"
   aws_ec2 describe-security-groups --group-ids "$VM_SG" \
-    --query 'SecurityGroups[0].IpPermissions[?FromPort==`22` && ToPort==`22`].IpRanges[].CidrIp' --output text 2>/dev/null \
+    --query "SecurityGroups[0].IpPermissions[?FromPort==\`$porta\` && ToPort==\`$porta\`].IpRanges[].CidrIp" --output text 2>/dev/null \
     | tr '\t' '\n' | sed '/^$/d'
 }
+
+regras_ssh() { regras_porta 22; } # mantido pelo nome: usado em explicar_falha_ssh/cmd_status
 
 opcoes_ssh() {
   printf '%s\n' -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
@@ -226,24 +234,48 @@ cmd_liberar_ip() {
   [ "${IP_INFORMADO:-}" = 1 ] && erro "com VM_IP informado à mão não sei qual é o security group. Rode sem VM_IP."
   achar_vm
   [ -n "$VM_SG" ] || erro "não achei o security group da VM."
-  local ip antigas cidr
+  local ip porta antigas cidr
   ip=$(meu_ip)
   [ -n "$ip" ] || erro "não consegui descobrir seu IP público (checkip.amazonaws.com)."
-  antigas=$(regras_ssh)
 
-  passo "Security group $VM_SG, porta 22"
-  if printf '%s\n' "$antigas" | grep -qxF "$ip/32"; then
-    info "$ip/32 já está liberado."
-  else
-    aws_ec2 authorize-security-group-ingress --group-id "$VM_SG" --protocol tcp --port 22 --cidr "$ip/32" >/dev/null
-    info "liberado: $ip/32"
-  fi
-  # Mantém a regra original do projeto: SSH só do IP do operador.
-  for cidr in $antigas; do
-    [ "$cidr" = "$ip/32" ] && continue
-    aws_ec2 revoke-security-group-ingress --group-id "$VM_SG" --protocol tcp --port 22 --cidr "$cidr" >/dev/null
-    info "removido: $cidr (IP antigo)"
+  # Só a 22 (SSH). O OTLP e o trapper das APIs/hosts do WSL local viajam
+  # dentro de um túnel SSH (serviço "tunel" do compose.local.yaml) e ficam
+  # presos em 127.0.0.1 na VM: nunca abra essas portas na internet.
+  for porta in 22; do
+    passo "Security group $VM_SG, porta $porta"
+    antigas=$(regras_porta "$porta")
+    if printf '%s\n' "$antigas" | grep -qxF "$ip/32"; then
+      info "$ip/32 já está liberado."
+    else
+      aws_ec2 authorize-security-group-ingress --group-id "$VM_SG" --protocol tcp --port "$porta" --cidr "$ip/32" >/dev/null
+      info "liberado: $ip/32"
+    fi
+    # Não destrutivo por padrão: regras de outros IPs na porta ficam como estão.
+    # Para revogar os IPs antigos, rode com REVOGAR_ANTIGAS=1 (pede confirmação por regra).
+    for cidr in $antigas; do
+      [ "$cidr" = "$ip/32" ] && continue
+      if [ "${REVOGAR_ANTIGAS:-0}" != 1 ]; then
+        info "mantido: $cidr (outro IP; use REVOGAR_ANTIGAS=1 para remover)"
+        continue
+      fi
+      local resp=""
+      read -r -p "   remover $cidr da porta $porta? [s/N] " resp || resp=""
+      [ "$resp" = s ] || [ "$resp" = S ] || { info "mantido: $cidr"; continue; }
+      aws_ec2 revoke-security-group-ingress --group-id "$VM_SG" --protocol tcp --port "$porta" --cidr "$cidr" >/dev/null
+      info "removido: $cidr (IP antigo)"
+    done
   done
+}
+
+cmd_ip() { # IP público atual da VM, sem formatação (para scripts, ex. subir-local.sh)
+  achar_vm
+  [ -n "$VM_IP" ] || erro "a VM $VM_ID está sem IP público (parada?)."
+  printf '%s\n' "$VM_IP"
+}
+
+cmd_chave() { # caminho da chave SSH que funciona com a VM (para scripts, ex. subir-local.sh)
+  preparar_acesso
+  printf '%s\n' "$SSH_KEY"
 }
 
 cmd_ligar() {
@@ -332,6 +364,8 @@ case "${1:-deploy}" in
   deploy)      cmd_deploy ;;
   status)      cmd_status ;;
   liberar-ip)  cmd_liberar_ip ;;
+  ip)          cmd_ip ;;
+  chave)       cmd_chave ;;
   ligar)       cmd_ligar ;;
   parar)       cmd_parar ;;
   ssh)         cmd_ssh ;;

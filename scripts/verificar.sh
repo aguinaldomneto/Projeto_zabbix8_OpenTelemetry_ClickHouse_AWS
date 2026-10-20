@@ -11,7 +11,8 @@ if [ "${1:-}" = "--diagnostico" ]; then
   "$0" 2>&1 | tee "$arquivo"
   {
     echo; echo "===== docker compose ps"; docker compose ps -a
-    for s in zabbix-proxy zabbix-server zabbix-web clickhouse gerador; do
+    for s in zabbix-proxy zabbix-server zabbix-web clickhouse gerador ia-assistente; do
+      [ -n "$(docker compose ps -q "$s" 2>/dev/null)" ] || continue
       echo; echo "===== logs: $s (últimas 60 linhas)"
       docker compose logs --no-color --tail 60 "$s" 2>&1
     done
@@ -132,6 +133,19 @@ if resposta=$(curl -fsS -m 10 -H 'Content-Type: application/json-rpc' \
   ok "API respondendo em 127.0.0.1:${porta}: $(printf '%s' "$resposta" | sed -n 's/.*"result":"\([^"]*\)".*/versão \1/p')"
 else
   falha "o frontend não respondeu em 127.0.0.1:${porta}: $resposta"
+fi
+
+echo "== 6. Serviços opcionais (hosts simulados, IA) — só os que estiverem de pé"
+algum_opcional=0
+for s in host-aws-01 host-aws-02 host-aws-03 host-aws-04 host-aws-05 ia-assistente; do
+  id=$(docker compose ps -q "$s" 2>/dev/null)
+  [ -n "$id" ] || continue
+  algum_opcional=1
+  estado=$(docker inspect -f '{{.State.Status}}' "$id")
+  if [ "$estado" = running ]; then ok "$s: $estado"; else falha "$s: $estado"; fi
+done
+if [ "$algum_opcional" = 0 ]; then
+  info "nenhum (rode 'make hosts-up' / 'make ia-up' se quiser os hosts simulados desta VM e a ponte com o Gemini)"
 fi
 
 echo "== Memória por container"
