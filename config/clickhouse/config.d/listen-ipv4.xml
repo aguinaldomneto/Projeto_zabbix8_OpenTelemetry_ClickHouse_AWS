@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<!-- Escuta só em IPv4: o Docker/WSL deste lab não tem IPv6 e o padrão [::] gera erro no log. -->
+<clickhouse>
+    <listen_host>0.0.0.0</listen_host>
+</clickhouse>

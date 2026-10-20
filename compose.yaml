@@ -33,6 +33,19 @@ x-banco: &banco
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?rode "make env" para gerar o arquivo .env}
   POSTGRES_DB: zabbix
 
+# "Host simulado": agente ativo com o item de latência (UserParameter em
+# config/zabbix-agent/, não icmppingsec — o proxy não alcançaria os agentes
+# do WSL local, que ficam atrás de NAT; a checagem é feita pelo agente).
+x-host-aws: &host-aws
+  image: zabbix/zabbix-agent2:alpine-trunk@sha256:83564398cddf59bfd9907c5bc89991fbdc746a7d77d820023e8d2b4d5d5449b1
+  profiles: ["hosts"]
+  restart: unless-stopped
+  volumes:
+    - ./config/zabbix-agent/latencia.conf:/etc/zabbix/zabbix_agent2.d/latencia.conf:ro
+    - ./config/zabbix-agent/latencia.sh:/etc/zabbix/scripts/latencia.sh:ro
+  mem_limit: 32m
+  logging: *logging
+
 services:
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873}
@@ -72,6 +85,7 @@ services:
       - chdata:/var/lib/clickhouse
       - ./config/clickhouse/init:/docker-entrypoint-initdb.d:ro
       - ./config/clickhouse/config.d/baixo-consumo.xml:/etc/clickhouse-server/config.d/baixo-consumo.xml:ro
+      - ./config/clickhouse/config.d/listen-ipv4.xml:/etc/clickhouse-server/config.d/listen-ipv4.xml:ro
     ulimits:
       nofile:
         soft: 262144
@@ -108,6 +122,12 @@ services:
       ZBX_STARTDBSYNCERS: "2"
       ZBX_STARTLLDPROCESSORS: "1"
       ZBX_STARTTELEMETRYQUERYPOLLERS: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 10051"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
     mem_limit: 768m
     stop_grace_period: 30s
     logging: *logging
@@ -119,12 +139,20 @@ services:
       postgres:
         condition: service_healthy
       zabbix-server:
-        condition: service_started
+        condition: service_healthy
     environment:
       <<: [*banco, *telemetria]
       ZBX_SERVER_HOST: zabbix-server
       ZBX_SERVER_NAME: ${ZBX_SERVER_NAME:-Lab Zabbix 8 + OpenTelemetry}
       PHP_TZ: ${TZ_LAB:-America/Sao_Paulo}
+      # Lido pelo módulo do widget "Insights" (Actions/WidgetAnalyze.php).
+      IA_ASSISTENTE_URL: http://ia-assistente:8090
+    volumes:
+      # Módulo de frontend do widget "Insights" (botão "Analisar" -> Gemini).
+      # Ainda precisa ser habilitado uma vez em Administration > General >
+      # Modules (ou pelo "make bootstrap", que chama module.create). Veja o
+      # README.
+      - ./config/zabbix-widgets/insights:/usr/share/zabbix/modules/insights:ro
     ports:
       # Por padrão só em 127.0.0.1: acesse por túnel SSH (veja o README).
       - "${BIND_ADDR:-127.0.0.1}:${ZBX_WEB_PORT:-8080}:8080"
@@ -143,7 +171,7 @@ services:
     init: true
     depends_on:
       zabbix-server:
-        condition: service_started
+        condition: service_healthy
       clickhouse:
         condition: service_healthy
     # A imagem ainda não tem variável de ambiente para ligar o coletor
@@ -167,8 +195,24 @@ services:
       - ./config/proxy/zabbix_proxy_lab.conf:/etc/zabbix/lab/zabbix_proxy_lab.conf:ro
       - proxydb:/var/lib/zabbix/db_data
     ports:
-      # OTLP/gRPC para aplicações fora do Compose (o gerador usa a rede interna).
-      - "${BIND_ADDR:-127.0.0.1}:${OTLP_PORT:-4317}:4317"
+      # OTLP/gRPC. Variável PRÓPRIA (ZBX_OTLP_BIND_ADDR), separada da
+      # BIND_ADDR geral da web UI: as APIs fictícias e o gerador de tráfego
+      # do WSL local (compose.local.yaml) precisam alcançar essa porta pela
+      # internet, sem abrir a web UI junto. Veja "liberar-ip" no README.
+      - "${ZBX_OTLP_BIND_ADDR:-127.0.0.1}:${OTLP_PORT:-4317}:4317"
+      # Trapper (agentes ativos). Mesma lógica: os 10 hosts simulados do
+      # WSL local precisam alcançar essa porta pela internet.
+      - "${ZBX_TRAPPER_BIND_ADDR:-127.0.0.1}:${ZBX_TRAPPER_PORT:-10051}:10051"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 10051"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     mem_limit: 384m
     stop_grace_period: 30s
     logging: *logging
@@ -181,7 +225,7 @@ services:
     restart: unless-stopped
     depends_on:
       zabbix-proxy:
-        condition: service_started
+        condition: service_healthy
     command: ["python", "gerador.py"]
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://zabbix-proxy:4317
@@ -205,6 +249,48 @@ services:
       ZBX_API_URL: http://zabbix-web:8080/api_jsonrpc.php
       ZBX_ADMIN_PASSWORD: ${ZBX_ADMIN_PASSWORD:?rode "make env" para gerar o arquivo .env}
       ZBX_PROXY_NAME: ${ZBX_PROXY_NAME:-zabbix-proxy-otel}
+    volumes:
+      # Templates importados pelo bootstrap.py (configuration.import).
+      - ./config/zabbix-templates:/app/zabbix-templates:ro
+    logging: *logging
+
+  # 5 "hosts simulados" nesta mesma VM (os outros 10 ficam no WSL local, veja
+  # compose.local.yaml). Agentes ativos, rede interna do Compose — não
+  # precisam de porta nova. Suba com: make hosts-up
+  host-aws-01:
+    <<: *host-aws
+    environment: {ZBX_HOSTNAME: host-aws-01, ZBX_ACTIVESERVERS: zabbix-proxy:10051}
+  host-aws-02:
+    <<: *host-aws
+    environment: {ZBX_HOSTNAME: host-aws-02, ZBX_ACTIVESERVERS: zabbix-proxy:10051}
+  host-aws-03:
+    <<: *host-aws
+    environment: {ZBX_HOSTNAME: host-aws-03, ZBX_ACTIVESERVERS: zabbix-proxy:10051}
+  host-aws-04:
+    <<: *host-aws
+    environment: {ZBX_HOSTNAME: host-aws-04, ZBX_ACTIVESERVERS: zabbix-proxy:10051}
+  host-aws-05:
+    <<: *host-aws
+    environment: {ZBX_HOSTNAME: host-aws-05, ZBX_ACTIVESERVERS: zabbix-proxy:10051}
+
+  # Ponte Zabbix -> Gemini (webhook de problema + widget "Insights" do
+  # dashboard). A GEMINI_API_KEY só existe aqui. Suba com: make ia-up
+  ia-assistente:
+    build: ./ferramentas
+    image: zbx8lab-ferramentas:local
+    profiles: ["ia"]
+    restart: unless-stopped
+    command: ["python", "ia_assistente.py"]
+    environment:
+      # Sem ":?" de propósito: variáveis obrigatórias em QUALQUER serviço do
+      # compose.yaml bloqueiam "make up" mesmo quando esse serviço está num
+      # profile desligado (docker compose interpola o arquivo inteiro antes
+      # de filtrar por profile). ia_assistente.py avisa em runtime se faltar.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODELO: ${GEMINI_MODELO:-gemini-2.0-flash}
+      ZBX_API_URL: http://zabbix-web:8080/api_jsonrpc.php
+      ZBX_IA_API_TOKEN: ${ZBX_IA_API_TOKEN:-}
+    mem_limit: 96m
     logging: *logging
 
   # Opcional: servidor MCP do Zabbix (IA consultando o Zabbix). Desligado por
