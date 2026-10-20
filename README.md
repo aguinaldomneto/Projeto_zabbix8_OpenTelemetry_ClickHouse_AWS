@@ -28,6 +28,13 @@ os dados no menu **APM** e o server consulta as mesmas tabelas com itens do tipo
 | `zabbix-proxy` | `zabbix/zabbix-proxy-sqlite3:alpine-trunk` | Coletor OpenTelemetry |
 | `gerador` | construída aqui (`ferramentas/`) | Telemetria de teste |
 | `zabbix-mcp-server` | `zabbix/zabbix-mcp-server:alpine-trunk` | Opcional, desligado |
+| `host-aws-01`...`05` | `zabbix/zabbix-agent2:alpine-trunk` | Opcional (`make hosts-up`): 5 "hosts simulados" nesta VM |
+| `ia-assistente` | construída aqui (`ferramentas/`) | Opcional (`make ia-up`): ponte Zabbix → Gemini |
+
+As APIs fictícias, o Redpanda, o gerador de tráfego e os outros 10 hosts
+simulados **não** entram aqui: rodam no seu WSL local
+(`compose.local.yaml`, `make local-up`) para não pesar a VM de 4GB. Veja a
+seção "APIs fictícias, Kafka e hosts simulados" abaixo.
 
 ## Requisitos
 
@@ -145,6 +152,24 @@ para o seu IP. A exposição para recrutadores (HTTPS e usuário somente leitura
    `make vm-digests` mostra os digests em uso na VM.
 5. **Histórico do Zabbix no PostgreSQL**, não no ClickHouse. Menos peças para
    depurar agora; o ClickHouse fica só com a telemetria.
+6. **Latência dos hosts simulados via `UserParameter` do agente, não
+   `icmppingsec` nativo.** `icmppingsec` é executado pelo *proxy*, que só
+   alcança os 5 hosts simulados da própria VM — os 10 do WSL local ficam
+   atrás de NAT e o proxy não tem como pingá-los de volta. Um item ativo
+   (o agente faz o ping e manda o resultado) funciona dos dois lados.
+7. **Módulo do widget em `/usr/share/zabbix/modules/`, não `/widgets/`.**
+   Essa segunda pasta é só para os módulos que já vêm com a imagem; a
+   primeira é a pasta vazia (com `.gitignore`) que a própria imagem deixa
+   para módulos do operador, e é nela que o `CModuleManager` deriva o
+   namespace PHP esperado (`Modules\<Nome>`, não `Widgets\<Nome>` — conferido
+   lendo o código-fonte da imagem, já que isso não está documentado).
+8. **Item "Telemetry query" montado via API, não escrito à mão.** O campo
+   `query` não é SQL puro: é um objeto estruturado (`signal_type`,
+   `columns`, `aggregated_columns`, `filter`) específico do item type 24,
+   também sem documentação pública ainda nesta fase do 8.0. Os templates em
+   `config/zabbix-templates/` foram gerados criando os itens pela API de
+   verdade e exportando com `configuration.export` — não eram pra ser
+   editados à mão sem recriar esse caminho.
 
 ## Estado da validação
 
@@ -164,6 +189,29 @@ foi escrito não tinha acesso ao Docker Hub. Os pontos que só a primeira subida
 confirma: o proxy aceitar o arquivo de configuração próprio, o caminho
 proxy → ClickHouse com dados reais e as telas de APM lendo as tabelas.
 
+**APIs fictícias, Kafka, widget e templates**, ao contrário, foram
+conferidos contra uma subida real do laboratório (`make up && make
+bootstrap`) no ambiente onde foram escritos, desta vez com acesso ao Docker
+Hub:
+
+- Fluxo `pedidos` → Redpanda → `pagamentos` → webhook de volta em `pedidos`,
+  rodando de verdade (`compose.local.yaml`) e confirmado nos logs.
+- Widget "Insights": módulo carregado pelo Zabbix de verdade (namespace,
+  ações e botão "Analisar"), chamando o `ia-assistente`, que por sua vez
+  alcançou a API real do Gemini (recusada por falta de chave válida — o
+  caminho completo até lá funciona).
+- `module.create`/`module.update` e `configuration.import` chamados pelo
+  `bootstrap.py` contra a API real, habilitando o widget e importando os
+  dois templates.
+- Os dois templates (`config/zabbix-templates/*.yaml`) apagados e
+  reimportados de volta pela própria API, confirmando que o YAML exportado
+  é suficiente para recriá-los do zero.
+
+**Não testado**: o caminho completo pela internet entre o WSL local e uma
+VM real da AWS (SSH liberado por `liberar-ip`, túnel e IP descobertos por
+`subir-local.sh`), os 15 hosts simulados reportando de verdade, e uma
+chave real do Gemini de ponta a ponta.
+
 ## Problemas comuns
 
 | Sintoma | Causa provável | O que fazer |
@@ -175,6 +223,10 @@ proxy → ClickHouse com dados reais e as telas de APM lendo as tabelas.
 | zabbix-server reiniciando com `execute SQL script create.sql.gz: conn closed` | PostgreSQL morto por OOM ao criar o banco | `POSTGRES_MEM` de 1536m ou mais no `.env` e `docker compose up -d` |
 | Senha do banco não confere após mexer no `.env` | Senha só vale na criação do volume | `make limpar` e subir de novo |
 | `bootstrap` não entra como Admin | Senha trocada pela interface | Ajustar `ZBX_ADMIN_PASSWORD` no `.env` |
+| `local-up` falha ou o tráfego não chega à VM | Porta 22 não liberada para o seu IP atual, ou o túnel caiu | `make vm-liberar-ip`; `./scripts/subir-local.sh logs tunel` |
+| Widget "Insights" não aparece para adicionar no dashboard | Módulo não habilitado | `make bootstrap` de novo, ou Administration > General > Modules > Scan directory |
+| `ia-assistente` responde "Não consegui falar com..." | Serviço não está de pé | `make ia-up` |
+| Botão "Analisar com IA" devolve erro da API do Gemini | `GEMINI_API_KEY` vazia/inválida ou nome do modelo mudou | Conferir a chave no `.env`; ajustar `GEMINI_MODELO` |
 
 ## Servidor MCP (opcional)
 
@@ -184,22 +236,210 @@ use túnel SSH (`-L 8443:127.0.0.1:8443`). Crie um usuário próprio, com o mín
 de permissão e token com validade, e libere a API no perfil desse usuário (no
 8.0 ela vem desligada para todos os perfis, menos o de super administrador).
 
+## APIs fictícias, Kafka, hosts simulados e IA
+
+Cenário maior, pensado para gerar volume de telemetria realista (milhões de
+registros ao longo de alguns dias) e testar o Zabbix como "cérebro" da
+ingestão: 5 APIs fictícias (webhook + Kafka), 15 hosts simulados e uma
+integração com a API do Gemini para explicar problemas.
+
+**Onde cada peça roda, e por quê:** a VM da AWS continua em ~4GB (sem
+redimensionar). Por isso, tudo que pesa mais — as 5 APIs, o Redpanda, o
+gerador de tráfego e 10 dos 15 hosts simulados — roda no **seu WSL local**,
+não na VM. A VM só ganha dois acréscimos pequenos: 5 hosts simulados leves
+(`make hosts-up`) e a ponte com o Gemini (`make ia-up`), juntos menos de 250MB.
+
+```
+WSL local (sua máquina)                          VM da AWS (como já é)
+┌──────────────────────────────────┐             ┌───────────────────────┐
+│ trafego ─┬→ lb-01 → pedidos,      │   OTLP:4317 │ zabbix-proxy → CH      │
+│          │          pagamentos    │ ───────────→│                        │
+│          └→ lb-02 → catalogo,     │  trapper    │ + host-aws-01..05      │
+│                      streaming,   │  :10051     │ + ia-assistente → API  │
+│                      autenticacao │ ───────────→│   do Gemini            │
+│ pedidos ⇄ redpanda ⇄ pagamentos   │             │                        │
+│ (Kafka: "pedido-criado")          │             │ zabbix-web: widget     │
+│ 10 hosts simulados (zabbix-agent2)│             │ "Insights" (botão      │
+└──────────────────────────────────┘             │ "Analisar")            │
+                                                   └───────────────────────┘
+```
+
+### Subir no WSL local
+
+```bash
+make vm-liberar-ip   # libera só a 22 (SSH) no security group para o seu IP atual
+make local-up        # descobre o IP da VM, sobe túnel SSH + APIs fictícias + Redpanda + tráfego + 10 hosts
+```
+
+O OTLP (4317) e o trapper (10051) **não são expostos na internet**: no
+`bind` da VM eles ficam em `127.0.0.1` e o serviço `tunel` do
+`compose.local.yaml` os alcança por um túnel SSH (só a 22 é aberta, e só para
+o seu IP). As APIs e os hosts simulados falam com `tunel:<porta>`.
+
+`make local-up` grava o IP atual da VM e a chave SSH num `.env.local` (fora do Git, igual
+ao `.env` normal) — rode de novo sempre que a VM religar (o IP muda, mesmo
+problema que `vm-liberar-ip` já resolve do lado do SSH). `make local-down`
+para tudo; `make gera-carga-de-estresse` dispara um pico de carga pontual
+(precisa do `local-up` rodando antes).
+
+As 5 APIs (`pedidos`, `pagamentos`, `catalogo`, `streaming`, `autenticacao`)
+respondem 95% 200 / 3% 404 / 2% 500 por padrão (`API_TAXA_404`/`API_TAXA_500`
+em `ferramentas/api_ficticia.py`), com payload e latência variáveis. Ao
+"fechar uma compra", `pedidos` publica no tópico Redpanda `pedido-criado` e
+incrementa `negocio.faturamento`/`negocio.carrinho_abandonado`; `pagamentos`
+consome esse tópico e confirma de volta por **webhook HTTP** em `pedidos` —
+cobre Kafka e webhook no mesmo fluxo. `streaming` registra
+`negocio.buffering_s`. `lb-01`/`lb-02` (nginx) fazem o papel das "máquinas
+que sobraram" como balanceador das outras.
+
+### Na VM: hosts simulados e IA
+
+```bash
+make hosts-up   # 5 agentes leves nesta VM
+make ia-up      # ponte com o Gemini (precisa de GEMINI_API_KEY no .env)
+```
+
+A chave do Gemini (`GEMINI_API_KEY`, gerada em aistudio.google.com) e um
+token de API do Zabbix com permissão mínima (`ZBX_IA_API_TOKEN`, só
+`event.acknowledge`) vão no `.env` da VM — nunca chegam ao navegador. Dois
+usos, nos moldes do artigo
+["Integrating Zabbix with Gemini"](https://www.linkedin.com/pulse/integrating-zabbix-gemini-arian-afshar-uqm9f/):
+
+- **Webhook de problema**: configure um media type webhook (Administration
+  > Alerts > Media types) que faça `POST` para `http://ia-assistente:8090/analisar`
+  com o contexto do evento; ligue-o a uma action restrita às triggers de
+  anomalia (ver abaixo) — os triggers nativos decidem **quando** há
+  problema, o Gemini só explica **o quê** aconteceu (controla o custo de
+  chamadas à API).
+- **Widget "Insights" no dashboard**: módulo em `config/zabbix-widgets/insights/`,
+  habilitado automaticamente pelo `make bootstrap`. Adicione-o a um
+  dashboard e clique em "Analisar com IA" para um resumo dos problemas
+  recentes.
+
+### Templates e triggers de anomalia
+
+`make bootstrap` importa automaticamente (`configuration.import`) os
+templates em `config/zabbix-templates/`:
+
+- **APM API fictícia**: métricas HTTP de cada API fictícia (requisições, erros
+  4xx/5xx, taxa de erro, latência média e p95) via *Telemetry query* sobre
+  `otel_traces`, no padrão "mestre agrupado + dependentes" (ver abaixo). Um host
+  por API (`pedidos`, `pagamentos`, ...) com a macro `{$API_SERVICE}`.
+- **OTel ClickHouse APM**: visão geral da telemetria (spans, erros, logs,
+  métricas, frescor da ingestão) e descoberta (LLD) de serviços.
+- **Host simulado - latência (IA)**: item de latência via `UserParameter`
+  (checado pelo próprio agente — não por `icmppingsec`, que o proxy não
+  conseguiria disparar contra os agentes do WSL local, atrás de NAT). Ligue
+  também o template nativo "Linux by Zabbix agent active" para
+  filesystem/rede padrão.
+
+Ambos os templates têm uma trigger com `baselinedev()` (desvio sobre a
+média da mesma hora nos últimos 7 dias) — é assim que o Zabbix sinaliza
+anomalia sem IA nenhuma. Como depende de histórico, só fica útil depois de
+alguns dias de `trafego` rodando.
+
+### Importar os templates (`make templates`)
+
+```bash
+make templates          # importa/atualiza templates, hosts e dashboard (idempotente)
+make templates-status   # mostra, por host, cada item (ok/NOT SUPPORTED, último valor) e as triggers
+```
+
+`make templates` chama `scripts/importar-templates.sh` (senha do Admin lida do
+`.env`, nunca impressa), que roda `ferramentas/importar_templates.py`: importa
+**todos** os `config/zabbix-templates/*.yaml` com `configuration.import`
+(somente criar/atualizar, **sem** `deleteMissing`), garante o host `otel-apm-lab`
+e um host por API fictícia (monitorados pelo proxy `zabbix-proxy-otel`, com
+`{$API_SERVICE}`) e recria o dashboard "OTel APM (ClickHouse)". Pode rodar quantas
+vezes quiser. Antes da primeira importação, `scripts/backup.sh` guarda um dump
+do Postgres.
+
+#### Limitação do trunk: macros não são expandidas no `query`
+
+No Zabbix 8 trunk, itens *Telemetry query* (tipo 24) **não expandem macros**
+(`{$...}` nem `{#...}`) dentro do campo `query`. Um filtro como
+`ServiceName = {$API_SERVICE}` é enviado ao ClickHouse **literalmente** e nunca
+casa, então o item não coleta. O contorno usado nos dois templates:
+
+1. **Itens mestres** (`apm.api.status.raw`, `apm.api.latencia.raw`) fazem
+   `GROUP BY ServiceName` (e código HTTP) e devolvem **uma linha JSON por grupo**
+   a cada minuto (sem filtro por serviço).
+2. **Itens dependentes** (`apm.requisicoes.row`, `apm.erros5xx.row`,
+   `apm.latencia.media`, ...) filtram o serviço no pré-processamento
+   (JSONPath `$[?(@.ServiceName == "{$API_SERVICE}")]...`), onde macros de
+   usuário e de LLD **funcionam**.
+3. Itens calculados somam as linhas (`apm.erros5xx` = soma de 1h,
+   `apm.erro.pct`, `apm.requisicoes.rate`).
+
+As chaves e nomes antigos (`apm.erros5xx`, `apm.latencia.media`) foram mantidos.
+O trigger "Pico de erros 5xx fora do padrão" usa `baselinedev()`: fica em estado
+de erro ("not enough data") até haver ~7 dias de histórico da mesma hora, o que é
+esperado; a trigger "taxa de erro 5xx alta" avalia desde o primeiro ciclo.
+
+#### Adicionar um novo serviço ou rota
+
+- **Novo serviço**: crie um host (ou rode `API_HOSTS=pedidos,...,novo make templates`),
+  monitorado pelo proxy, com a macro `{$API_SERVICE}` = `service.name` do app e o
+  template "APM API ficticia". Nada muda nos mestres: eles já agrupam todos os serviços.
+- **Nova rota**: inclua `SpanName` (ou o atributo `url.path`) em `columns` do
+  mestre `apm.api.status.raw`, crie uma macro `{$API_ROTA}` e acrescente
+  `&& @.SpanName == "{$API_ROTA}"` ao JSONPath de um item dependente novo.
+  Cuidado com a cardinalidade (uma linha por rota e status por minuto).
+- Limiares: macros `{$API.ERRO.PCT.WARN}` / `{$API.ERRO.PCT.RECOVERY}` (template ou host).
+
+#### Reverter
+
+- Restaurar tudo: `scripts/restore.sh` (dump do Postgres feito por `scripts/backup.sh`).
+- Só o template/hosts, pela API (token de Admin): `template.delete` com o
+  templateid de "APM API ficticia", `host.delete` nos hosts `pedidos`,
+  `pagamentos`, `catalogo`, `streaming`, `autenticacao` e `dashboard.delete` em
+  "OTel APM (ClickHouse)". Os arquivos anteriores estão em `.backup-p1/`.
+
+> O trunk muda a cada build: ao trocar o digest das imagens (`make digests`),
+> rode `make templates && make templates-status` e confira que nenhum item ficou
+> "NOT SUPPORTED".
+
+## Backup agendado
+
+- **Quando:** todo dia às 02:30 (cron do usuário `suporte` no WSL), mais uma entrada `@reboot` que,
+  3 minutos após o WSL subir, roda o backup só se ainda não existir o do dia (compensa PC desligado à noite).
+- **O que roda:** `scripts/backup-rotacao.sh` (espera Postgres/ClickHouse healthy por até 5 min, executa
+  `scripts/backup.sh`, confere `sha256sum -c SHA256SUMS` e só então aplica a retenção).
+- **Retenção:** 7 dias. Apaga apenas `~/backups/zbx8lab-AAAAMMDD` com data no nome anterior a hoje-7;
+  nunca o de hoje nem o mais recente, e nada é apagado se o backup ou a verificação falhar.
+- **Local:** `~/backups/zbx8lab-AAAAMMDD/` (fora do repositório).
+- **Log:** `~/backups/backup.log` (data/hora e resultado; mantém as últimas 500 linhas).
+  Última saída bruta: `~/backups/.ultima-execucao.out`.
+- **Restaurar:** `scripts/restore.sh ~/backups/zbx8lab-AAAAMMDD` (modo teste, em containers descartáveis).
+  Não use `--sobrescrever-lab` sem necessidade: ele substitui os dados do laboratório.
+- **Desativar:** `crontab -e` e comentar (`#`) as linhas entre `# --- zbx8lab` e `# --- fim zbx8lab`.
+  Rodar manualmente: `scripts/backup-rotacao.sh`.
+- **Limitação:** só roda com o Windows ligado. O `.wslconfig` define `vmIdleTimeout=86400000` e
+  `instanceIdleTimeout=-1` para o WSL não desligar por ociosidade (mantém ~1,5 GB de RAM do host ocupados).
+  Os containers `zbx8lab-*` voltam sozinhos após reiniciar o WSL (`unless-stopped`).
+
 ## Próximas etapas
 
-1. Trocar o gerador pelo coletor da apuração do TSE, com modo replay.
-2. Templates com itens *Telemetry query*, triggers e dashboard.
-3. Infraestrutura como código (Terraform e Ansible) e exposição com HTTPS.
-4. Página de vitrine no GitHub Pages.
+1. Sincronizar automaticamente a macro `{$LATENCIA_ALVO}` dos hosts do WSL
+   local com o IP atual da VM (hoje é manual).
+2. Infraestrutura como código (Terraform e Ansible) e exposição com HTTPS.
+3. Página de vitrine no GitHub Pages.
 
 ## Estrutura
 
 ```
-compose.yaml                      serviços do laboratório
-.env.example                      modelo de configuração (o .env real fica fora do Git)
+compose.yaml                      serviços do laboratório (VM da AWS)
+compose.local.yaml                APIs fictícias, Redpanda, tráfego e 10 hosts (WSL local)
+.env.example                      modelo de configuração da VM (o .env real fica fora do Git)
+.env.local.example                modelo informativo do .env.local (gerado por subir-local.sh)
 Makefile                          atalhos (make ajuda)
 config/clickhouse/init/           criação das tabelas otel_*
 config/clickhouse/config.d/       ajustes de memória do ClickHouse
 config/proxy/                     configuração do proxy com o coletor OpenTelemetry
-ferramentas/                      gerador de telemetria e bootstrap pela API
-scripts/                          gerar-env, preflight, verificar, subir-tudo e deploy-aws
+config/zabbix-agent/              item de latência dos hosts simulados (UserParameter)
+config/nginx/                     balanceadores das APIs fictícias (lb-01, lb-02)
+config/zabbix-templates/          templates "APM API fictícia", "OTel ClickHouse APM" e "Host simulado" (make templates importa)
+config/zabbix-widgets/insights/   módulo do widget "Insights" (botão "Analisar" -> Gemini)
+ferramentas/                      gerador, bootstrap, APIs fictícias, tráfego e ia-assistente
+scripts/                          gerar-env, preflight, verificar, subir-tudo, subir-local e deploy-aws
 ```
