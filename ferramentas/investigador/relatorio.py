@@ -71,13 +71,16 @@ def texto_copiavel(evidencias_mascaradas, modo="pre"):
 
 
 def texto_ack(rel, url_relatorio):
+    """Mensagem curta do ack do Zabbix: linguagem direta, sem os códigos
+    internos de hipótese/evidência (H1, E1, E2...) usados no relatório
+    completo — esses ficam só na página de relatório (link abaixo)."""
     rotulo = "pré-análise" if rel["modo"] == "pre" else "análise aprofundada"
     if rel.get("analise"):
         a = rel["analise"]
         corpo = a["resumo"]
         if a["hipoteses"]:
             h = a["hipoteses"][0]
-            corpo += f" | H1: {h['titulo']} ({h['confianca']}; {', '.join(h['evidencias']) or 'sem evidência citada'})"
+            corpo += f" Causa provável: {h['titulo']} (confiança {h['confianca']})."
         modo = f"IA {rel.get('modelo', '')}"
     else:
         corpo = rel.get("resumo_heuristico", "")
