@@ -485,6 +485,49 @@ copia o texto **já mascarado**; cole em <https://gemini.google.com/app>.
   arquivos alterados em `.backup-p1/` (sufixo `.5`).
 - Legado: `make ia-legado-up` sobe o `ia-assistente` corrigido.
 
+### Dados sintéticos de baseline (D-1/D-2)
+
+A comparação "mesma janela de ontem" (D-1) do investigador (consulta
+`resumo_spans` em `ferramentas/investigador/evidencias.py`, com a janela
+deslocada em -86400s) só encontra dados se o serviço já tinha spans Server
+no ClickHouse 24h antes do evento. Como o laboratório roda há poucas horas,
+os serviços fictícios (`pedidos`, `pagamentos`, `catalogo`, `streaming`,
+`autenticacao`) não têm esse passado, e o relatório mostra "comparação D-1:
+sem dados na mesma janela de ontem".
+
+`scripts/gerar-historico-sintetico.py` insere spans Server **sintéticos**
+em `zabbix.otel_traces` (mesmo esquema e nomes de serviço/span da API
+fictícia real, mesma distribuição de status/latência), cobrindo alguns dias
+*imediatamente antes* do primeiro timestamp real de cada serviço — sem
+sobrepor dados reais. Cada linha ganha o atributo
+`ResourceAttributes['zbx8lab.origem'] = 'backfill-sintetico'`, que não
+interfere nas colunas que o investigador filtra (ServiceName, SpanKind,
+Timestamp) e serve só para marcar/limpar os dados depois.
+
+```
+python3 scripts/gerar-historico-sintetico.py                  # padrão: 3 dias (D-1..D-3), 5 serviços
+python3 scripts/gerar-historico-sintetico.py --dias 2 --servicos pedidos
+python3 scripts/gerar-historico-sintetico.py --forcar          # apaga e regenera blocos já existentes
+python3 scripts/gerar-historico-sintetico.py --limpar          # remove todos os dados sintéticos e sai
+```
+
+Idempotente: roda de novo sem `--forcar` e pula os blocos que já existem
+(não duplica). Volume típico: ~8,6 mil linhas/dia/serviço (~130 mil linhas
+para 3 dias x 5 serviços), menos de 10 MiB em disco no ClickHouse — a
+tabela já tem TTL de 7 dias, então os dados sintéticos também expiram sós.
+
+**Limitação conhecida (não coberta por este script):** os triggers
+`baselinedev(...,"d",7)` de `config/zabbix-templates/api-ficticia.yaml` e
+`host-simulado.yaml` precisam de 7 dias de **histórico do próprio
+Zabbix** (itens `apm.erros5xx`/`lab.latencia`), não do ClickHouse — exigiria
+inserir diretamente no banco do `zabbix-server`, bem mais arriscado, e foi
+deixado de fora de propósito. Só a comparação D-1 do investigador (o
+problema relatado) depende do ClickHouse e é o que este script resolve.
+
+Limpar depois: `python3 scripts/gerar-historico-sintetico.py --limpar`
+(ou `ALTER TABLE zabbix.otel_traces DELETE WHERE mapContains(ResourceAttributes,'zbx8lab.origem') SETTINGS mutations_sync=1`
+direto no ClickHouse), ou simplesmente esperar o TTL de 7 dias apagar.
+
 ## Backup agendado
 
 - **Quando:** todo dia às 02:30 (cron do usuário `suporte` no WSL), mais uma entrada `@reboot` que,
