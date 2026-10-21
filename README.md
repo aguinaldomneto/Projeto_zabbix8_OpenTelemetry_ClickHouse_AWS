@@ -398,6 +398,11 @@ publicada) junta evidências **somente leitura** e, se você configurar uma
 chave, pede hipóteses ao Gemini. Sem chave ele roda em **modo "somente
 evidências"** (estado padrão): nada sai da máquina.
 
+Resumo visual dos ganhos de usar IA aqui (detalhes técnicos do fluxo no
+diagrama ASCII logo abaixo):
+
+![Infográfico com cinco benefícios do investigador de causa raiz com IA: pré-análise em segundos, evidências do Zabbix e ClickHouse/OpenTelemetry correlacionadas automaticamente, mascaramento de dados sensíveis sem ação automática no Zabbix, funcionamento com ou sem chave do Gemini, e resumo curto no evento com relatório detalhado sob demanda](docs/img/investigador-beneficios.svg)
+
 ```
 problema (sev >= Média, tag layer=apm ou target=opentelemetry, fora de manutenção)
    │ action "Investigador IA - pré-análise"

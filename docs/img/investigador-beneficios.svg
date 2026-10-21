@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" role="img" aria-labelledby="titulo descricao">
+  <title id="titulo">Beneficios do investigador de causa raiz com IA (Gemini)</title>
+  <desc id="descricao">Infografico com cinco cartoes: reducao de minutos para segundos na pre-analise, evidencias do Zabbix e ClickHouse/OpenTelemetry correlacionadas automaticamente, mascaramento de dados sensiveis e nenhuma acao automatica no Zabbix, funcionamento com ou sem chave do Gemini, e resumo curto no evento com relatorio detalhado sob demanda.</desc>
+
+  <defs>
+    <style>
+      .card-title { font: 700 16px -apple-system, Segoe UI, Helvetica, Arial, sans-serif; }
+      .card-body  { font: 400 12.5px -apple-system, Segoe UI, Helvetica, Arial, sans-serif; }
+      .big-title  { font: 700 25px -apple-system, Segoe UI, Helvetica, Arial, sans-serif; }
+      .subtitle   { font: 400 14px -apple-system, Segoe UI, Helvetica, Arial, sans-serif; }
+      .footer     { font: 400 11.5px -apple-system, Segoe UI, Helvetica, Arial, sans-serif; }
+    </style>
+  </defs>
+
+  <!-- fundo -->
+  <rect x="0" y="0" width="960" height="600" rx="20" fill="#0d1117"/>
+
+  <!-- titulo -->
+  <text x="480" y="40" text-anchor="middle" class="big-title" fill="#f0f6fc">Por que usar IA para investigar RCA?</text>
+  <text x="480" y="65" text-anchor="middle" class="subtitle" fill="#9da7b3">Investigador local (Gemini opcional) — evidencias primeiro, IA quando ajudar</text>
+
+  <!-- ===================== CARTAO 1 — tempo ===================== -->
+  <g>
+    <rect x="40" y="90" width="280" height="215" rx="14" fill="#161b22" stroke="#30363d"/>
+    <circle cx="180" cy="130" r="26" fill="#58a6ff"/>
+    <g transform="translate(180,130)" stroke="#0d1117" stroke-width="2.2" stroke-linecap="round" fill="none">
+      <circle r="13"/>
+      <path d="M0,-7 L0,0 L6,4"/>
+    </g>
+    <text x="180" y="186" text-anchor="middle" class="card-title" fill="#58a6ff">De minutos a segundos</text>
+    <g class="card-body" fill="#c9d1d9" text-anchor="middle">
+      <text x="180" y="208">Pre-analise dispara ao abrir o</text>
+      <text x="180" y="224">problema (webhook responde em</text>
+      <text x="180" y="240">menos de 1s). Resumo das</text>
+      <text x="180" y="256">evidencias pronto em segundos,</text>
+      <text x="180" y="272">sem caçar em varios paineis.</text>
+    </g>
+  </g>
+
+  <!-- ===================== CARTAO 2 — evidencias correlacionadas ===================== -->
+  <g>
+    <rect x="340" y="90" width="280" height="215" rx="14" fill="#161b22" stroke="#30363d"/>
+    <circle cx="480" cy="130" r="26" fill="#3fb950"/>
+    <g transform="translate(480,130)" stroke="#0d1117" stroke-width="2.2" fill="none">
+      <circle cx="-7" cy="0" r="10"/>
+      <circle cx="7" cy="0" r="10"/>
+    </g>
+    <text x="480" y="186" text-anchor="middle" class="card-title" fill="#3fb950">Evidencias ja correlacionadas</text>
+    <g class="card-body" fill="#c9d1d9" text-anchor="middle">
+      <text x="480" y="208">Zabbix (evento, trigger, outros</text>
+      <text x="480" y="224">problemas) + ClickHouse/OTel</text>
+      <text x="480" y="240">(spans, erros, p50/p95/p99,</text>
+      <text x="480" y="256">comparacao D-1) juntados</text>
+      <text x="480" y="272">automaticamente, sem caça manual.</text>
+    </g>
+  </g>
+
+  <!-- ===================== CARTAO 3 — seguranca ===================== -->
+  <g>
+    <rect x="640" y="90" width="280" height="215" rx="14" fill="#161b22" stroke="#30363d"/>
+    <circle cx="780" cy="130" r="26" fill="#58a6ff"/>
+    <g transform="translate(780,130)" stroke="#0d1117" stroke-width="2.2" stroke-linejoin="round" fill="none">
+      <path d="M0,-14 L12,-9 L12,3 C12,12 6,17 0,19 C-6,17 -12,12 -12,3 L-12,-9 Z"/>
+      <path d="M-5,0 L-1,4 L6,-5" stroke-linecap="round"/>
+    </g>
+    <text x="780" y="186" text-anchor="middle" class="card-title" fill="#58a6ff">Seguranca por padrao</text>
+    <g class="card-body" fill="#c9d1d9" text-anchor="middle">
+      <text x="780" y="208">Mascaramento obrigatorio de</text>
+      <text x="780" y="224">segredos/PII antes de qualquer</text>
+      <text x="780" y="240">envio; logs tratados como dados</text>
+      <text x="780" y="256">nao confiaveis (anti prompt-</text>
+      <text x="780" y="272">injection); zero acao automatica.</text>
+    </g>
+  </g>
+
+  <!-- ===================== CARTAO 4 — com ou sem chave ===================== -->
+  <g>
+    <rect x="190" y="325" width="280" height="215" rx="14" fill="#161b22" stroke="#30363d"/>
+    <circle cx="330" cy="365" r="26" fill="#3fb950"/>
+    <g transform="translate(330,365)" stroke="#0d1117" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <circle cx="-7" cy="0" r="5"/>
+      <path d="M-2,0 L12,0 M6,0 L6,5 M10,0 L10,4"/>
+    </g>
+    <text x="330" y="421" text-anchor="middle" class="card-title" fill="#3fb950">Funciona com ou sem chave</text>
+    <g class="card-body" fill="#c9d1d9" text-anchor="middle">
+      <text x="330" y="443">Sem GEMINI_API_KEY: modo</text>
+      <text x="330" y="459">"somente evidencias" (padrao,</text>
+      <text x="330" y="475">sem custo). Com chave: hipoteses</text>
+      <text x="330" y="491">reais do Gemini, mascaradas.</text>
+    </g>
+  </g>
+
+  <!-- ===================== CARTAO 5 — resumo primeiro ===================== -->
+  <g>
+    <rect x="490" y="325" width="280" height="215" rx="14" fill="#161b22" stroke="#30363d"/>
+    <circle cx="630" cy="365" r="26" fill="#58a6ff"/>
+    <g transform="translate(630,365)" stroke="#0d1117" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <rect x="-11" y="-11" width="14" height="7" rx="2"/>
+      <rect x="-5" y="2" width="16" height="9" rx="2"/>
+    </g>
+    <text x="630" y="421" text-anchor="middle" class="card-title" fill="#58a6ff">Resumo primeiro, detalhe depois</text>
+    <g class="card-body" fill="#c9d1d9" text-anchor="middle">
+      <text x="630" y="443">Tag + comentario curto no evento</text>
+      <text x="630" y="459">ao abrir. Botao "Aprofundar" no</text>
+      <text x="630" y="475">widget traz o relatorio completo</text>
+      <text x="630" y="491">so quando voce precisar.</text>
+    </g>
+  </g>
+
+  <text x="480" y="575" text-anchor="middle" class="footer" fill="#6e7681">zabbix8-telemetria-lab · servico "investigador" · ferramentas/investigador/</text>
+</svg>
